@@ -1,0 +1,481 @@
+'use strict';
+
+// 沙箱自测：不碰本机任何真实配置，跑一遍主要链路。
+//
+//   node setup/selftest/run.js            跑全部用例
+//   node setup/selftest/run.js --keep     跑完保留沙箱目录（排查用）
+//
+// 原理：把所有路径环境变量指向一个临时目录，用 mock-preload.js 把
+// lark-cli 换成读沙箱文件，再用 NODE_OPTIONS=--require 注入到桥接进程。
+// 生产代码里没有任何测试分支。
+//
+// 覆盖的链路：
+//   1. 插件扫描与加载
+//   2. 内核启动、单实例锁
+//   3. 收到飞书消息 → 新话题 → 推工作区选择卡片
+//   4. 回序号 → 开窗（拦截）→ 绑定话题
+//   5. 已绑定话题里发言 → 投递给会话（拦截管道）
+//   6. 提问 hook：here 档立刻放行、away 档落盘并阻塞
+//   7. 提问卡片推出 → 点选项 → hook 拿到答案
+//   8. 权限 hook：允许/拒绝两条路
+//   9. 关停：锁被释放
+
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const net = require('net');
+const { spawn, spawnSync } = require('child_process');
+
+const ROOT = path.resolve(__dirname, '..', '..');
+const KEEP = process.argv.includes('--keep');
+
+// 内核模块在 require 时就把路径常量算死了，所以沙箱路径必须在第一次 require 之前设好。
+// 下面 mkSandbox() 会覆盖这几个变量，这里只是先把顶层 require 挪到函数里。
+
+const results = [];
+function check(name, ok, detail) {
+  results.push({ name, ok, detail: detail || '' });
+  console.log(`${ok ? '  ✓' : '  ✗'} ${name}${detail ? `  ${detail}` : ''}`);
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function mkSandbox() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'feishu-selftest-'));
+  const paths = {
+    dir,
+    data: path.join(dir, 'data'),
+    logs: path.join(dir, 'logs'),
+    config: path.join(dir, 'config.json'),
+    mock: path.join(dir, 'mock'),
+    claude: path.join(dir, 'claude'),
+    socket: process.platform === 'win32'
+      ? `\\\\.\\pipe\\feishu-selftest-${process.pid}`
+      : path.join(dir, 'test.sock'),
+  };
+  for (const d of [paths.data, paths.logs, paths.mock, paths.claude,
+    path.join(paths.claude, 'sessions'), path.join(paths.claude, 'projects')]) {
+    fs.mkdirSync(d, { recursive: true });
+  }
+  fs.writeFileSync(paths.config, JSON.stringify({
+    chatId: 'oc_selftest',
+    larkCli: 'lark-cli',
+    plugins: { ask: { presenceAware: true, awayWaitSeconds: 60, awayIdleSeconds: 180 } },
+    launchAliases: { demo: paths.claude },
+    contextWindowSize: 200000,
+  }, null, 2));
+  fs.writeFileSync(path.join(paths.mock, 'messages.json'), '{}');
+  for (const f of ['inbox.jsonl', 'outbox.jsonl', 'calls.jsonl']) {
+    fs.writeFileSync(path.join(paths.mock, f), '');
+  }
+  return paths;
+}
+
+function env(p, extra) {
+  return {
+    ...process.env,
+    FEISHU_DATA_DIR: p.data,
+    FEISHU_LOG_DIR: p.logs,
+    FEISHU_CONFIG: p.config,
+    FEISHU_MOCK_DIR: p.mock,
+    FEISHU_CLAUDE_HOME: p.claude,
+    FEISHU_PRESENCE_FILE: path.join(p.data, 'presence.json'),
+    // 把 away 档的等待压到 8 秒，让失败用例不至于卡满 60 秒（配置值本身仍是合法的 60）
+    FEISHU_ASK_WAIT_MS: '8000',
+    NODE_OPTIONS: `--require ${path.join(__dirname, 'mock-preload.js').replace(/\\/g, '/')}`,
+    ...extra,
+  };
+}
+
+function readLines(file) {
+  try {
+    return fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+  } catch (_) {
+    return [];
+  }
+}
+
+function pushEvent(p, ev) {
+  fs.appendFileSync(path.join(p.mock, 'inbox.jsonl'), JSON.stringify(ev) + '\n');
+}
+
+function outbox(p) {
+  return readLines(path.join(p.mock, 'outbox.jsonl'));
+}
+
+// 伪造一份「人在电脑前」的采样，让 hook 走 here 档
+function writePresence(p, { idleSeconds, locked }) {
+  fs.writeFileSync(path.join(p.data, 'presence.json'), JSON.stringify({
+    ok: true, ts: Date.now(), idleSeconds, locked, windows: [],
+  }));
+}
+
+// 启动一个假的会话收信端，验证桥接确实往管道里写了东西
+function startFakeSession(p, sessionId) {
+  return new Promise((resolve, reject) => {
+    const got = [];
+    const server = net.createServer((c) => {
+      let buf = '';
+      c.on('data', (d) => {
+        buf += d.toString('utf8');
+        let i;
+        while ((i = buf.indexOf('\n')) >= 0) {
+          const line = buf.slice(0, i).trim();
+          buf = buf.slice(i + 1);
+          if (line) { try { got.push(JSON.parse(line)); } catch (_) {} }
+        }
+      });
+    });
+    server.on('error', reject);
+    server.listen(p.socket, () => {
+      // 让内核认为这个会话已注册
+      fs.writeFileSync(path.join(p.claude, 'sessions', `${sessionId}.json`), JSON.stringify({
+        sessionId, messagingSocketPath: p.socket, pid: process.pid, cwd: p.claude, name: 'selftest',
+      }));
+      fs.writeFileSync(path.join(p.claude, 'sessions', `${process.pid}.key`), JSON.stringify({
+        peerToken: 'tok_selftest',
+      }));
+      resolve({ got, server });
+    });
+  });
+}
+
+function runHook(p, script, stdin, timeoutMs) {
+  const t0 = Date.now();
+  const r = spawnSync(process.execPath, [path.join(ROOT, script)], {
+    input: JSON.stringify(stdin),
+    encoding: 'utf8',
+    timeout: timeoutMs || 60000,
+    env: env(p),
+  });
+  let out = null;
+  try { out = JSON.parse((r.stdout || '').trim() || 'null'); } catch (_) {}
+  return { status: r.status, stdout: r.stdout, stderr: r.stderr, out, ms: Date.now() - t0 };
+}
+
+async function main() {
+  const p = mkSandbox();
+  console.log(`沙箱：${p.dir}\n`);
+
+  console.log('1. 插件扫描与加载');
+  const pluginLoad = spawnSync(process.execPath, ['-e', `
+    const plugin = require('${path.join(ROOT, 'kernel', 'plugin.js').replace(/\\/g, '/')}');
+    const lib = require('${path.join(ROOT, 'kernel', 'lib.js').replace(/\\/g, '/')}');
+    const bus = plugin.createBus();
+    const loaded = plugin.loadAll({ bus, lib, platform: require('${path.join(ROOT, 'platform').replace(/\\/g, '/')}'), global: { plugins: {} }, dataDir: lib.DATA_DIR });
+    console.log(JSON.stringify(loaded.map((x) => ({ id: x.manifest.id, hooks: Object.keys(x.hooks), services: Object.keys(x.manifest.services || {}) }))));
+  `], { cwd: ROOT, encoding: 'utf8', env: env(p) });
+  let loaded = [];
+  try { loaded = JSON.parse(pluginLoad.stdout.trim()); } catch (_) {}
+  check('四个插件全部加载', loaded.length === 4, loaded.map((x) => x.id).join(','));
+  check('core 有服务与 SessionStart hook',
+    loaded.some((x) => x.id === 'core' && x.services.length === 1 && x.hooks.includes('SessionStart')));
+  check('ask 带 PreToolUse hook', loaded.some((x) => x.id === 'ask' && x.hooks.includes('PreToolUse')));
+  check('permission 带 PermissionRequest hook',
+    loaded.some((x) => x.id === 'permission' && x.hooks.includes('PermissionRequest')));
+  check('notify 带 Stop 与 Notification', loaded.some((x) => x.id === 'notify'
+    && x.hooks.includes('Stop') && x.hooks.includes('Notification')));
+
+  console.log('\n2. 内核启动');
+  const bridge = spawn(process.execPath, [path.join(ROOT, 'kernel', 'index.js')], {
+    cwd: ROOT, env: env(p), stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
+  });
+  let bridgeOut = '';
+  bridge.stdout.on('data', (d) => { bridgeOut += d.toString(); });
+  bridge.stderr.on('data', (d) => { bridgeOut += d.toString(); });
+
+  // 等单实例锁落盘
+  for (let i = 0; i < 60; i++) {
+    await sleep(100);
+    if (fs.existsSync(path.join(p.data, 'bridge.pid'))) break;
+  }
+  check('进程启动并写入 pid 锁', fs.existsSync(path.join(p.data, 'bridge.pid')),
+    fs.existsSync(path.join(p.data, 'bridge.pid')) ? `pid=${fs.readFileSync(path.join(p.data, 'bridge.pid'), 'utf8')}` : '无');
+  await sleep(400);
+
+  const bridgeLog = () => {
+    try { return fs.readFileSync(path.join(p.logs, 'bridge.log'), 'utf8'); } catch (_) { return ''; }
+  };
+  check('日志记录已启动服务', /已启动 \d+ 个服务/.test(bridgeLog()), '');
+  check('订阅了两个飞书事件', /card\.action\.trigger/.test(bridgeLog()), '');
+
+  console.log('\n3. 收到新话题消息 → 推工作区选择卡片');
+  // 先让沙箱里「发现」一个工作区
+  fs.writeFileSync(path.join(p.claude, 'projects', 'demo.jsonl'),
+    JSON.stringify({ type: 'message', cwd: p.claude, timestamp: new Date().toISOString() }) + '\n');
+
+  // 必须在推事件**之前**登记它所属的话题——桥接收到事件后会立刻反查
+  const m1 = JSON.parse(fs.readFileSync(path.join(p.mock, 'messages.json'), 'utf8') || '{}');
+  m1.om_msg1 = { thread_id: 'omt_new1' };
+  fs.writeFileSync(path.join(p.mock, 'messages.json'), JSON.stringify(m1));
+
+  pushEvent(p, {
+    __event: 'im.message.receive_v1',
+    type: 'im.message.receive_v1',
+    message_id: 'om_msg1',
+    chat_type: 'group',
+    content: '帮我改个 bug',
+    message_type: 'text',
+  });
+  await sleep(1500);
+
+  let ob = outbox(p);
+  check('推出了卡片', ob.length >= 1, `${ob.length} 条`);
+  const pickerCard = ob.find((o) => JSON.stringify(o.card || {}).includes('选择工作区'));
+  check('卡片是「选择工作区」', !!pickerCard, '');
+  check('卡片带选项按钮',
+    !!(pickerCard && JSON.stringify(pickerCard.card).includes('"type":"callback"')), '');
+
+  console.log('\n4. 回序号 → 开窗并绑定话题');
+  fs.writeFileSync(path.join(p.data, 'pending', 'om_msg1.json'), JSON.stringify({
+    messageId: 'om_msg1', threadId: 'omt_new1', list: [p.claude],
+  }));
+  const m2 = JSON.parse(fs.readFileSync(path.join(p.mock, 'messages.json'), 'utf8') || '{}');
+  m2.om_pick1 = { thread_id: 'omt_new1' };
+  fs.writeFileSync(path.join(p.mock, 'messages.json'), JSON.stringify(m2));
+
+  pushEvent(p, {
+    __event: 'im.message.receive_v1',
+    type: 'im.message.receive_v1',
+    message_id: 'om_pick1',
+    chat_type: 'group',
+    content: '1',
+  });
+  await sleep(2000);
+
+  let mapping = '';
+  try { mapping = fs.readFileSync(path.join(p.data, 'mapping.jsonl'), 'utf8'); } catch (_) {}
+  check('话题已写入映射表', mapping.includes('omt_new1'), mapping ? '' : 'mapping.jsonl 不存在');
+
+  console.log('\n5. 已绑定话题里发言 → 投递到会话');
+  // 先把一个假会话注册好，让桥接能找到它的管道
+  const fake = await startFakeSession(p, 'sess_selftest');
+  const m3 = JSON.parse(fs.readFileSync(path.join(p.mock, 'messages.json'), 'utf8') || '{}');
+  m3.om_say1 = { thread_id: 'omt_new1' };
+  fs.writeFileSync(path.join(p.mock, 'messages.json'), JSON.stringify(m3));
+  // 让映射指向这个假会话
+  const lines = fs.readFileSync(path.join(p.data, 'mapping.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  const last = lines[lines.length - 1];
+  fs.appendFileSync(path.join(p.data, 'mapping.jsonl'), JSON.stringify({
+    ...last, feishuMessageId: 'omt_new1', sessionId: 'sess_selftest', sessionName: 'selftest',
+  }) + '\n');
+
+  pushEvent(p, {
+    __event: 'im.message.receive_v1',
+    type: 'im.message.receive_v1',
+    message_id: 'om_say1',
+    chat_type: 'group',
+    content: '继续',
+  });
+  await sleep(1200);
+  check('管道收到投递', fake.got.length > 0,
+    fake.got.length ? `auth=${!!fake.got[0].token}` : '没收到');
+  check('投递带来源说明', fake.got.some((g) => JSON.stringify(g).includes('跨会话通道')), '');
+  fake.server.close();
+
+  console.log('\n6. 提问 hook：here 档立刻放行');
+  writePresence(p, { idleSeconds: 5, locked: false });
+  const qHere = runHook(p, 'plugins/ask/hooks/ask-question.js', {
+    hook_event_name: 'PreToolUse',
+    session_id: 'sess_selftest',
+    cwd: p.claude,
+    tool_name: 'AskUserQuestion',
+    tool_input: { questions: [{ question: '选哪个？', header: '测试', options: [{ label: 'A' }, { label: 'B' }] }] },
+  });
+  // here 档的意义就是「立刻放行」——超过 3 秒就说明它在白等，判定逻辑有问题
+  check('here 档 3 秒内返回', qHere.ms < 3000, `${qHere.ms}ms`);
+  check('here 档不输出决策（弹窗留给终端）', !qHere.out || !qHere.out.hookSpecificOutput, '');
+  check('here 档记录标了 noticeOnly',
+    (() => {
+      try {
+        const dir = path.join(p.data, 'questions');
+        return fs.readdirSync(dir).some((f) => {
+          const r = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));
+          return r.noticeOnly === true && r.presence && r.presence.level === 'here';
+        });
+      } catch (_) { return false; }
+    })(), '');
+
+  console.log('\n7. 提问 hook：away 档落盘 + 卡片 + 作答回传');
+  writePresence(p, { idleSeconds: 9999, locked: false });
+  const awayHook = spawn(process.execPath, [path.join(ROOT, 'plugins/ask/hooks/ask-question.js')], {
+    cwd: ROOT, env: env(p), stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  let awayOut = '';
+  awayHook.stdout.on('data', (d) => { awayOut += d.toString(); });
+  awayHook.stdin.write(JSON.stringify({
+    hook_event_name: 'PreToolUse',
+    session_id: 'sess_selftest',
+    cwd: p.claude,
+    tool_name: 'AskUserQuestion',
+    tool_input: { questions: [{ question: '选哪个？', header: '测试', options: [{ label: 'A' }, { label: 'B' }] }] },
+  }));
+  awayHook.stdin.end();
+
+  // 等记录落盘。第 6 步 here 档会留下一条 noticeOnly 记录，这里只认非 noticeOnly 的
+  let qfile = null;
+  for (let i = 0; i < 40; i++) {
+    await sleep(100);
+    const dir = path.join(p.data, 'questions');
+    if (!fs.existsSync(dir)) continue;
+    const hit = fs.readdirSync(dir).filter((x) => x.endsWith('.json')).map((x) => path.join(dir, x))
+      .find((f) => {
+        try { return !JSON.parse(fs.readFileSync(f, 'utf8')).noticeOnly; } catch (_) { return false; }
+      });
+    if (hit) { qfile = hit; break; }
+  }
+  check('away 档写入待答记录', !!qfile, qfile ? path.basename(qfile) : '无');
+
+  if (qfile) {
+    const rec0 = JSON.parse(fs.readFileSync(qfile, 'utf8'));
+    check('记录标了 away 档', rec0.presence && rec0.presence.level === 'away', rec0.presence && rec0.presence.reason);
+    check('记录不是 noticeOnly', !rec0.noticeOnly, '');
+
+    await sleep(2400);   // 等 bridge 扫描并发卡
+    ob = outbox(p);
+    const qCard = ob.find((o) => JSON.stringify(o.card || {}).includes('需要你来选'));
+    check('桥接推出了作答卡片', !!qCard, '');
+
+    // 模拟用户点第一个选项。直接改文件而不是 require 内核模块——
+    // 内核在 require 时就把数据目录算死了，这里必须走文件。
+    const rec = JSON.parse(fs.readFileSync(qfile, 'utf8'));
+    rec.answers = { ...(rec.answers || {}), '选哪个？': 'A' };
+    rec.done = true;
+    rec.doneAt = Date.now();
+    fs.writeFileSync(qfile, JSON.stringify(rec, null, 2));
+
+    await new Promise((r) => awayHook.on('exit', r));
+    let payload = null;
+    try { payload = JSON.parse(awayOut.trim()); } catch (_) {}
+    check('hook 返回 allow + 答案',
+      !!(payload && payload.hookSpecificOutput
+        && payload.hookSpecificOutput.permissionDecision === 'allow'
+        && payload.hookSpecificOutput.updatedInput.answers['选哪个？'] === 'A'),
+      awayOut.slice(0, 120));
+  }
+
+  console.log('\n8. 权限 hook：允许与拒绝');
+  writePresence(p, { idleSeconds: 9999, locked: false });
+  for (const decision of ['allow', 'deny']) {
+    const h = spawn(process.execPath, [path.join(ROOT, 'plugins/permission/hooks/permission-request.js')], {
+      cwd: ROOT, env: env(p), stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    let out = '';
+    h.stdout.on('data', (d) => { out += d.toString(); });
+    h.stdin.write(JSON.stringify({
+      hook_event_name: 'PermissionRequest',
+      session_id: 'sess_selftest',
+      cwd: p.claude,
+      tool_name: 'Bash',
+      tool_input: { command: 'rm -rf build' },
+    }));
+    h.stdin.end();
+
+    let pf = null;
+    for (let i = 0; i < 40; i++) {
+      await sleep(100);
+      const dir = path.join(p.data, 'questions');
+      if (!fs.existsSync(dir)) continue;
+      const fs2 = fs.readdirSync(dir).filter((x) => x.endsWith('.json'));
+      for (const name of fs2) {
+        const r = JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8'));
+        if (r.kind === 'permission' && !r.done && !r.retiredAt) { pf = path.join(dir, name); break; }
+      }
+      if (pf) break;
+    }
+
+    if (!pf) {
+      check(`权限(${decision}) 写入待答记录`, false, '没找到记录');
+      continue;
+    }
+    const pr = JSON.parse(fs.readFileSync(pf, 'utf8'));
+    pr.answers = { decision };
+    pr.done = true;
+    pr.doneAt = Date.now();
+    fs.writeFileSync(pf, JSON.stringify(pr, null, 2));
+    await new Promise((r) => h.on('exit', r));
+
+    let pl = null;
+    try { pl = JSON.parse(out.trim()); } catch (_) {}
+    const got = pl && pl.hookSpecificOutput && pl.hookSpecificOutput.decision;
+    check(`权限(${decision}) 返回正确决策`,
+      !!(got && got.behavior === decision), got ? got.behavior : out.slice(0, 100));
+  }
+
+  console.log('\n9. 配置 schema');
+  const cfgMod = require(path.join(ROOT, 'kernel', 'config.js'));
+  const cfgCheck = spawnSync(process.execPath, [path.join(ROOT, 'kernel', 'config.js'), '--check'], {
+    cwd: ROOT, encoding: 'utf8', env: env(p),
+  });
+  check('真实配置通过 schema 校验', cfgCheck.status === 0,
+    (cfgCheck.stdout || cfgCheck.stderr || '').trim().split('\n')[0] || '');
+
+  // 坏值必须被拦住，而不是静默生效
+  const badRange = cfgMod.validate(
+    { awayWaitSeconds: { type: 'integer', default: 1800, minimum: 60, maximum: 5700 } },
+    { awayWaitSeconds: 99999 },
+  );
+  check('越界值被拒绝', badRange.errors.length > 0, badRange.errors[0] || '');
+
+  const unknown = cfgMod.validate({ a: { type: 'boolean', default: true } }, { a: true, b: 1 });
+  check('未知键只警告不报错', unknown.errors.length === 0 && unknown.warnings.length === 1,
+    unknown.warnings[0] || '');
+
+  const dflt = cfgMod.validate({ a: { type: 'integer', default: 7 } }, {});
+  check('缺省时用 schema 的 default', dflt.values.a === 7, String(dflt.values.a));
+
+  // 用户只写一项时，其余项应保留 schema 默认值
+  const merged = cfgMod.validate(
+    { x: { type: 'boolean', default: true }, y: { type: 'integer', default: 5 } },
+    { y: 9 },
+  );
+  check('部分覆盖不影响其他默认值', merged.values.x === true && merged.values.y === 9,
+    JSON.stringify(merged.values));
+
+  const dumped = cfgMod.dumpSchema(Object.fromEntries(
+    require(path.join(ROOT, 'kernel', 'plugin.js')).discover().map((m) => [m.id, m])));
+  check('--dump 能导出全部插件 schema',
+    Object.keys(dumped.plugins).length === 4
+      && !!(dumped.plugins.ask.schema.properties.awayWaitSeconds || {})['x-ui'],
+    Object.keys(dumped.plugins).join(','));
+
+  console.log('\n10. 关停与残留锁接管');
+  // Windows 上 kill() 是终止进程，SIGTERM 处理器不会跑，pid 文件必然残留。
+  // 所以这里验证的不是「锁被清掉」，而是「下一个实例能把残留锁接管掉」——
+  // 这才是真实场景（任务管理器结束进程、断电、崩溃退出）。
+  bridge.kill();
+  await sleep(800);
+  const staleKept = fs.existsSync(path.join(p.data, 'bridge.pid'));
+
+  const again = spawn(process.execPath, [path.join(ROOT, 'kernel', 'index.js')], {
+    cwd: ROOT, env: env(p), stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
+  });
+  let againOut = '';
+  again.stdout.on('data', (d) => { againOut += d.toString(); });
+  again.stderr.on('data', (d) => { againOut += d.toString(); });
+  await sleep(1600);
+  check('强杀后新实例能接管残留锁', !againOut.includes('已有实例在运行'),
+    staleKept ? '旧锁文件仍在（符合 Windows 实际）' : '旧锁已清');
+  again.kill();
+  await sleep(300);
+
+  // ---- 汇总 ----
+  const bad = results.filter((r) => !r.ok);
+  console.log(`\n${'='.repeat(50)}`);
+  console.log(`共 ${results.length} 项，通过 ${results.length - bad.length}，失败 ${bad.length}`);
+  if (bad.length) {
+    console.log('\n失败项：');
+    bad.forEach((r) => console.log(`  - ${r.name} ${r.detail}`));
+    console.log('\n桥接输出：');
+    console.log(bridgeOut.slice(-2000));
+  }
+
+  if (!KEEP) {
+    try { fs.rmSync(p.dir, { recursive: true, force: true }); } catch (_) {}
+  } else {
+    console.log(`\n沙箱保留在：${p.dir}`);
+  }
+  process.exit(bad.length ? 1 : 0);
+}
+
+main().catch((e) => { console.error(e); process.exit(1); });

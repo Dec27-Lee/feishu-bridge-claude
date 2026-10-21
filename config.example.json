@@ -1,0 +1,35 @@
+{
+  "_说明": "由 kernel/config.js 的 schema 生成。只写你要覆盖的项，其余用默认值。",
+  "chatId": "",
+  "larkCli": "lark-cli",
+  "launchAliases": {},
+  "launchWorkspaces": [],
+  "contextWindowSize": 200000,
+  "chunkChars": 4000,
+  "sessionTtlHours": 48,
+  "mappingTtlDays": 14,
+  "imageTtlDays": 7,
+  "maxLogBytes": 5242880,
+  "plugins": {
+    "core": {
+      "pickMax": 20,
+      "resumeMax": 8,
+      "launchTimeoutSeconds": 30
+    },
+    "ask": {
+      "presenceAware": true,
+      "awayIdleSeconds": 180,
+      "awayWaitSeconds": 1800,
+      "notifyWhenPresent": true
+    },
+    "notify": {
+      "notifyOnStop": true,
+      "chunkChars": 4000
+    },
+    "permission": {
+      "presenceAware": true,
+      "awayWaitSeconds": 1800,
+      "notifyWhenPresent": true
+    }
+  }
+}

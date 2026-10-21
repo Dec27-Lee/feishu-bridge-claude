@@ -1,0 +1,41 @@
+{
+  "id": "permission",
+  "name": "权限确认代答",
+  "version": "1.0.0",
+  "description": "在飞书上点「允许 / 拒绝」代替终端里的权限确认框。定位是帮人点一下，不是绕过权限。",
+  "core": false,
+  "depends": [
+    "core"
+  ],
+  "config": {
+    "presenceAware": {
+      "type": "boolean",
+      "default": true,
+      "title": "按「人在不在电脑前」分流",
+      "description": "和提问插件同一套判定。关掉则一律推卡片。",
+      "ui:group": "在场判定",
+      "ui:widget": "switch"
+    },
+    "awayWaitSeconds": {
+      "type": "integer",
+      "default": 1800,
+      "minimum": 60,
+      "maximum": 5700,
+      "title": "人不在时最多等多久",
+      "description": "默认 1800 秒。必须小于 hook 超时（1900 秒）。",
+      "ui:group": "等待",
+      "ui:widget": "number"
+    },
+    "notifyWhenPresent": {
+      "type": "boolean",
+      "default": true,
+      "title": "人在电脑前也推提醒卡",
+      "description": "推一张不带按钮的卡片，只提示确认框在终端里。",
+      "ui:group": "提醒",
+      "ui:widget": "switch"
+    }
+  },
+  "hooks": {
+    "PermissionRequest": "hooks/permission-request.js"
+  }
+}

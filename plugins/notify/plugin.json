@@ -1,0 +1,34 @@
+{
+  "id": "notify",
+  "name": "任务通知",
+  "version": "1.0.0",
+  "description": "窗口干完活或需要你介入时，把结果推到它自己的飞书话题里。",
+  "core": false,
+  "depends": [
+    "core"
+  ],
+  "config": {
+    "notifyOnStop": {
+      "type": "boolean",
+      "default": true,
+      "title": "窗口跑完时推通知",
+      "description": "关掉则只有你主动发消息时才收发，不再主动推送。",
+      "ui:group": "通知",
+      "ui:widget": "switch"
+    },
+    "chunkChars": {
+      "type": "integer",
+      "default": 4000,
+      "minimum": 200,
+      "maximum": 30000,
+      "title": "单条消息字数上限",
+      "description": "超过就分段发。飞书单条消息有长度限制，太长会被拒。",
+      "ui:group": "通知",
+      "ui:widget": "number"
+    }
+  },
+  "hooks": {
+    "Stop": "hooks/notify.js",
+    "Notification": "hooks/notify-input.js"
+  }
+}

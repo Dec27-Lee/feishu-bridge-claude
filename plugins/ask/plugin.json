@@ -1,0 +1,49 @@
+{
+  "id": "ask",
+  "name": "提问代答",
+  "version": "1.0.0",
+  "description": "把 Claude Code 的选择题搬到飞书：人在电脑前就让弹窗留在终端，人不在就推卡片等你答。",
+  "core": false,
+  "depends": ["core"],
+  "config": {
+    "presenceAware": {
+      "type": "boolean",
+      "default": true,
+      "title": "按「人在不在电脑前」分流",
+      "description": "关掉就退回老行为：一律推卡片、一律等你答。",
+      "ui:group": "在场判定",
+      "ui:widget": "switch"
+    },
+    "awayIdleSeconds": {
+      "type": "integer",
+      "default": 180,
+      "minimum": 10,
+      "maximum": 3600,
+      "title": "多久没动键鼠算「人不在」",
+      "description": "默认 180 秒。调大=更容易判成你在电脑前；调小=更容易推卡片。",
+      "ui:group": "在场判定",
+      "ui:widget": "number"
+    },
+    "awayWaitSeconds": {
+      "type": "integer",
+      "default": 1800,
+      "minimum": 60,
+      "maximum": 5700,
+      "title": "人不在时最多等多久",
+      "description": "默认 1800 秒（30 分钟）。必须小于 hook 超时（1900 秒），否则卡片还没等到就被系统收走。",
+      "ui:group": "等待",
+      "ui:widget": "number"
+    },
+    "notifyWhenPresent": {
+      "type": "boolean",
+      "default": true,
+      "title": "人在电脑前也推提醒卡",
+      "description": "推一张不带按钮的蓝色卡片，只告诉你「弹窗在终端里」。关掉则完全不打扰。",
+      "ui:group": "提醒",
+      "ui:widget": "switch"
+    }
+  },
+  "hooks": {
+    "PreToolUse": "hooks/ask-question.js"
+  }
+}

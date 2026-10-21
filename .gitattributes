@@ -1,0 +1,13 @@
+# 保持 shell 脚本用 LF —— 在 Windows 上 checkout 后如果变成 CRLF，
+# 到 macOS/Linux 上会报 "bad interpreter: No such file or directory"。
+*.sh text eol=lf
+
+# Windows 脚本反过来：给没装 git 的人下载 zip 时也带 CRLF 更稳
+*.ps1 text eol=crlf
+*.vbs text eol=crlf
+*.cmd text eol=crlf
+
+# 其余按文本处理，让 diff 可读
+*.js text
+*.json text
+*.md text

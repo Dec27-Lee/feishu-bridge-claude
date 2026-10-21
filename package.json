@@ -1,0 +1,24 @@
+{
+  "name": "feishu-bridge-claude",
+  "version": "1.0.0",
+  "description": "用飞书手机端远程操控本机多个 Claude Code 窗口",
+  "main": "kernel/index.js",
+  "scripts": {
+    "start": "node kernel/index.js",
+    "check": "node setup/check.js",
+    "install": "node setup/install.js",
+    "verify": "node setup/verify.js",
+    "update": "node setup/update.js",
+    "selftest": "node setup/selftest/run.js",
+    "config:dump": "node kernel/config.js --dump",
+    "config:check": "node kernel/config.js --check"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Dec27-Lee/feishu-bridge-claude.git"
+  }
+}

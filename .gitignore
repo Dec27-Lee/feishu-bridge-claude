@@ -1,0 +1,15 @@
+# 运行时数据（含你的会话映射、日志、图片，绝不入 git）
+data/
+logs/
+config.json
+
+# 各插件自己的数据目录（data/plugins/<id>/）已被 data/ 覆盖
+
+# 构建产物
+platform/win32/presence.exe
+*.tmp
+
+# 系统垃圾
+.DS_Store
+Thumbs.db
+node_modules/
