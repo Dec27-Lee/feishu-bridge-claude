@@ -191,6 +191,14 @@ function resolve(pluginsById, userConfig) {
 
 // 顶层（非插件）配置。同样是「schema 即真相」。
 const TOP_SCHEMA = {
+  // 给人看的说明行，代码不读；声明出来是为了让校验不把它当未知键
+  _说明: {
+    type: 'string',
+    default: '由 kernel/config.js 的 schema 生成。只写你要覆盖的项，其余用默认值。',
+    title: '说明',
+    description: '自由文本，代码不读。用来在配置文件里写给你自己看的备注。',
+    'ui:group': '关于',
+  },
   chatId: {
     type: 'string',
     default: '',

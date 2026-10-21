@@ -82,6 +82,9 @@ function env(p, extra) {
     FEISHU_PRESENCE_FILE: path.join(p.data, 'presence.json'),
     // 把 away 档的等待压到 8 秒，让失败用例不至于卡满 60 秒（配置值本身仍是合法的 60）
     FEISHU_ASK_WAIT_MS: '8000',
+    // 关键：关掉真实采样器。否则它会每秒覆盖 data/presence.json，
+    // 把用例注入的「人在电脑前 / 人不在」假数据冲掉，判定就不可控了。
+    FEISHU_DISABLE_PRESENCE: '1',
     NODE_OPTIONS: `--require ${path.join(__dirname, 'mock-preload.js').replace(/\\/g, '/')}`,
     ...extra,
   };

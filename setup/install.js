@@ -216,7 +216,8 @@ function installAutostart() {
     return true;
   }
 
-  const script = path.join(ROOT, auto.install);
+  // auto.install 已经是绝对路径（由 platform/<os>/index.js 用 __dirname 拼好）
+  const script = path.resolve(auto.install);
   if (!fs.existsSync(script)) {
     say(`  缺少 ${script}，跳过`);
     return false;

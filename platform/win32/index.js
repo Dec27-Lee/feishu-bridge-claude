@@ -45,6 +45,10 @@ module.exports = {
     }
   },
 
+  presencePid() {
+    return presenceChild ? presenceChild.pid : null;
+  },
+
   presenceRunning() {
     return !!(presenceChild && presenceChild.exitCode === null && !presenceChild.killed);
   },

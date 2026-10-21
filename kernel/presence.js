@@ -42,6 +42,9 @@ function alive() {
 }
 
 function start() {
+  // 自测与排障时用 FEISHU_DISABLE_PRESENCE=1 关掉采样器：
+  // 否则真实采样会每秒覆盖 data/presence.json，把注入的假数据冲掉。
+  if (process.env.FEISHU_DISABLE_PRESENCE === '1') return false;
   try { return platform.startPresence(PRESENCE_FILE, 1000) === true; } catch (_) { return false; }
 }
 
@@ -54,6 +57,7 @@ function status() {
   return {
     available: !!platform.supportsPresence,
     running: alive(),
+    pid: (() => { try { return platform.presencePid ? platform.presencePid() : null; } catch (_) { return null; } })(),
     file: fs.existsSync(PRESENCE_FILE),
     fresh: !!p,
     idleSeconds: p ? p.idleSeconds : null,
