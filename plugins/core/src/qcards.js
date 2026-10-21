@@ -8,18 +8,24 @@
 const lib = require('../../../kernel/lib');
 const q = require('../../../kernel/questions');
 const { sendCardNewTopic } = require('./reply');
+const settings = require('./settings');
 
 function mentionLine(cfg) {
-  const ou = cfg && cfg.notifyOpenId;
+  // @ 谁属于 core 插件的设置，不是用户顶层配置
+  const ou = (cfg && cfg.notifyOpenId) || settings.get('notifyOpenId');
   return ou ? `<at id=${ou}></at>` : '';
 }
 
 // 卡片上交代一句「我在等多久、为什么等」。
 // 人就在电脑前（here）时不会推作答卡，只推一张提醒卡，文字见 buildNoticeCard。
-function waitHint(rec, cfg) {
+function waitHint(rec) {
   const p = rec.presence || {};
   if (p.level === 'away') {
-    const min = Math.round((cfg.awayWaitSeconds || cfg.askWaitSeconds || 1800) / 60);
+    // 等待上限属于产生这条记录的插件（提问是 ask，权限是 permission），
+    // 两边的 awayWaitSeconds 可以各配各的，所以按 kind 去读。
+    const owner = rec.kind === 'permission' ? 'permission' : 'ask';
+    const cfg = lib.readPluginConfig(owner);
+    const min = Math.round((cfg.awayWaitSeconds || 1800) / 60);
     return `<font color='grey'>你不在电脑前，这里一直等你（${min} 分钟上限）。`
       + `你回到电脑前，弹窗会自动交还终端。</font>`;
   }
@@ -29,8 +35,7 @@ function waitHint(rec, cfg) {
 // here 档的提醒卡：不阻塞、不需要作答，只是让手机那头知道「有个窗口在等你」。
 // 真正的弹窗已经在终端里了，所以这张卡绝不能带选项——带了就会让人以为要在飞书答。
 function buildNoticeCard(rec) {
-  const cfg = lib.readConfig();
-  const at = mentionLine(cfg);
+  const at = mentionLine(null);
   const isPerm = rec.kind === 'permission';
   const tool = isPerm ? ((rec.payload || {}).toolName || '') : '';
   const q = isPerm ? '' : (((rec.questions || [])[0] || {}).question || '');
@@ -76,9 +81,8 @@ function buildPermissionCard(rec) {
     detail.push('```\n' + (raw.length > 500 ? raw.slice(0, 500) + '…' : raw) + '\n```');
   }
 
-  const cfg = lib.readConfig();
-  const at = mentionLine(cfg);
-  const hint = waitHint(rec, cfg);
+  const at = mentionLine(null);
+  const hint = waitHint(rec);
   const elements = [
     ...(at ? [{ tag: 'markdown', content: at }] : []),
     { tag: 'markdown', content: `📁 \`${rec.cwd || ''}\`` },
@@ -159,9 +163,8 @@ function buildQuestionCard(rec) {
   const total = questions.length;
 
   const elements = [];
-  const cfg = lib.readConfig();
-  const at = mentionLine(cfg);
-  const hint = waitHint(rec, cfg);
+  const at = mentionLine(null);
+  const hint = waitHint(rec);
   if (at) elements.push({ tag: 'markdown', content: at });
   elements.push({ tag: 'markdown', content: `📁 \`${rec.cwd || ''}\`` });
   if (total > 1) {

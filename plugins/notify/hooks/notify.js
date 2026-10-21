@@ -110,7 +110,11 @@ const text = (input.last_assistant_message || '').trim();
 if (!sessionId) process.exit(0);
 if (!text) { lib.log('notify', `跳过（空回复）${sessionId}`); process.exit(0); }
 
+// 三个来源分开：顶层配置给 chatId 这类全局项，插件配置给本插件参数，
+// core 的配置只借 pinTopics（置顶能力由 core 拥有）。
 const cfg = lib.readConfig();
+const my = lib.readPluginConfig('notify');
+const coreCfg = lib.readPluginConfig('core');
 // `/resume` 之后进程可能同时挂着新旧两个 sessionId，hook stdin 给的是旧的那个；
 // 而桥接的会话注册表记的是新的那个。统一纠到会话表里的真身，
 // 否则话题记录、映射、注册表三者对不上，回消息就路由不回去。
@@ -118,12 +122,12 @@ const realSid = lib.resolveSessionAlias(sessionId);
 if (realSid !== sessionId) lib.log('notify', `会话 ${sessionId.slice(0, 8)} 解析为 ${realSid.slice(0, 8)}`);
 const nameInfo = sessionName(sessionId, cwd, input.transcript_path);
 const name = nameInfo.name;
-const chunks = splitText(text, cfg.chunkChars || 4000);
+const chunks = splitText(text, my.chunkChars || 4000);
 const stats = lib.statsLine(input.transcript_path, cfg);
 
 let sent = 0;
 // 同一窗口复用同一个常驻话题：首次通知开话题，之后所有通知都接进去
-const saved = cfg.threadMode ? lib.readThreadRoot(realSid) : null;
+const saved = my.threadMode !== false ? lib.readThreadRoot(realSid) : null;
 let threadRoot = saved && saved.rootMessageId ? saved.rootMessageId : null;
 let threadId = saved && saved.threadId ? saved.threadId : null;
 
@@ -165,7 +169,7 @@ chunks.forEach((chunk, i) => {
 
   // 话题模式：首条开话题，其余接在同一话题下
   let res;
-  if (cfg.threadMode && threadRoot) {
+  if (my.threadMode !== false && threadRoot) {
     res = lib.larkSync(['im', '+messages-reply', '--as', 'bot',
       '--message-id', threadRoot, '--reply-in-thread',
       '--msg-type', 'interactive', '--content', payload]);
@@ -180,7 +184,7 @@ chunks.forEach((chunk, i) => {
     // 新开的话题顺便置顶：否则窗口一多，它很快被刷到看不见的地方
     const freshTopic = !threadRoot;
     if (!threadRoot) threadRoot = mid;
-    if (freshTopic && cfg.pinTopics !== false) {
+    if (freshTopic && coreCfg.pinTopics !== false) {
       const pin = lib.pinThreadRoot(mid);
       if (!pin.ok) lib.log('notify', `话题置顶失败（不影响收发）: ${pin.error}`);
     }
@@ -191,7 +195,7 @@ chunks.forEach((chunk, i) => {
     });
 
     // 话题模式下补查 thread_id 并登记，话题内任意后续发言都能路由回本窗口
-    if (cfg.threadMode && !threadId) {
+    if (my.threadMode !== false && !threadId) {
       const info = lib.larkSync(['api', 'GET',
         `https://open.feishu.cn/open-apis/im/v1/messages/${mid}`, '--as', 'bot']);
       const item = ((info && info.data && info.data.items) || [])[0] || {};
@@ -204,7 +208,7 @@ chunks.forEach((chunk, i) => {
       }
     }
 
-    if (cfg.threadMode && threadRoot) {
+    if (my.threadMode !== false && threadRoot) {
       // userPicked 必须继承：它是「这棵树是用户挑的，别再另开」的标记
       lib.writeThreadRoot(realSid, threadRoot, threadId, {
         fromAiTitle: nameInfo.fromAiTitle,

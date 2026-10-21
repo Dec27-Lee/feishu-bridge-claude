@@ -8,11 +8,11 @@
     "core"
   ],
   "config": {
-    "notifyOnStop": {
+    "threadMode": {
       "type": "boolean",
       "default": true,
-      "title": "窗口跑完时推通知",
-      "description": "关掉则只有你主动发消息时才收发，不再主动推送。",
+      "title": "把通知接进该窗口的话题",
+      "description": "关掉则每条通知都在群里独立成条，不按窗口归类。一般不要关。",
       "ui:group": "通知",
       "ui:widget": "switch"
     },

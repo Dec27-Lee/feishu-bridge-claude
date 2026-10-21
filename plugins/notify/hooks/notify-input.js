@@ -64,6 +64,7 @@ const LABELS = {
 const label = LABELS[kind] || '⚠️ 需要你介入';
 
 const cfg = lib.readConfig();
+const my = lib.readPluginConfig('notify');   // threadMode 属于本插件
 const name = sessionName(sessionId, cwd, input.transcript_path);
 
 // 去重：同一窗口、同一类型、同一文案，10 分钟内只推一次，
@@ -103,9 +104,9 @@ const card = {
 };
 
 // 接到该窗口的常驻话题里，而不是在群里新开一条
-const saved = cfg.threadMode ? lib.readThreadRoot(sessionId) : null;
+const saved = my.threadMode !== false ? lib.readThreadRoot(sessionId) : null;
 let res;
-if (cfg.threadMode && saved && saved.rootMessageId) {
+if (my.threadMode !== false && saved && saved.rootMessageId) {
   res = lib.larkSync(['im', '+messages-reply', '--as', 'bot',
     '--message-id', saved.rootMessageId, '--reply-in-thread',
     '--msg-type', 'interactive', '--content', JSON.stringify(card)]);

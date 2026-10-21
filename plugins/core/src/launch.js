@@ -75,8 +75,10 @@ async function launchWindow(threadId, messageId, cwd, resumeSid) {
     lib.appendMapping({ ...rec, feishuMessageId: threadId, via: 'thread' });
     lib.writeThreadRoot(sessionId, messageId, threadId, { fromAiTitle: true, userPicked: true });
     // 新话题顺手置顶：群里话题一多，新窗口很容易被刷到看不见的地方
-    const pin = lib.pinThreadRoot(messageId);
-    if (!pin.ok) lib.log('bridge', `话题置顶失败（不影响收发）: ${pin.error}`);
+    if (settings.get('pinTopics') !== false) {
+      const pin = lib.pinThreadRoot(messageId);
+      if (!pin.ok) lib.log('bridge', `话题置顶失败（不影响收发）: ${pin.error}`);
+    }
   }
 
   const vbs = path.join(__dirname, 'launch-claude.vbs');

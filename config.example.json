@@ -12,6 +12,8 @@
   "maxLogBytes": 5242880,
   "plugins": {
     "core": {
+      "pinTopics": true,
+      "notifyOpenId": "",
       "pickMax": 20,
       "resumeMax": 8,
       "launchTimeoutSeconds": 30
@@ -23,7 +25,7 @@
       "notifyWhenPresent": true
     },
     "notify": {
-      "notifyOnStop": true,
+      "threadMode": true,
       "chunkChars": 4000
     },
     "permission": {

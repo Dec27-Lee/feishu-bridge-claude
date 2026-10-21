@@ -5,6 +5,22 @@
   "description": "话题路由、开窗、恢复会话、单实例与定时任务。没有它整套东西不成立。",
   "core": true,
   "config": {
+    "pinTopics": {
+      "type": "boolean",
+      "default": true,
+      "title": "新话题自动置顶",
+      "description": "每开一个窗口把它的话题置顶，话题多了好找。群里限制了置顶权限就关掉。",
+      "ui:group": "开窗",
+      "ui:widget": "switch"
+    },
+    "notifyOpenId": {
+      "type": "string",
+      "default": "",
+      "title": "需要你介入时 @ 谁",
+      "description": "你的 open_id（ou_ 开头）。留空则不 @。",
+      "ui:group": "提醒",
+      "ui:widget": "text"
+    },
     "pickMax": {
       "type": "integer",
       "default": 20,
