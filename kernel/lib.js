@@ -578,6 +578,10 @@ function discoverSessions(cfg = readConfig(), opts = {}) {
 
       const meta = transcriptMeta(file);
       if (!meta || !meta.cwd) continue;
+      // 目录被删/移走的会话不列：选中了也开不起来，只会白点一次。
+      // 这条以前没有，用户在一个临时目录的会话上点「换会话」，
+      // 结果窗口起在别的地方，看起来像完全无关的会话。
+      if (!fs.existsSync(meta.cwd)) continue;
       // 空会话（没标题、也没用户消息）不列，否则候选卡片全是「(无标题) 0轮」
       if (!meta.title && meta.userTurns < 1) continue;
 

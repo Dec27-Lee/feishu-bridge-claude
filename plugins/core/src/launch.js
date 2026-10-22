@@ -3,6 +3,7 @@
 // 拉起一个 Claude Code 窗口，并把话题绑定到新会话。
 // 开窗动作本身是平台专有的，交给 platform/；本模块只管绑定关系与等待注册。
 
+const fs = require('fs');
 const path = require('path');
 const lib = require('../../../kernel/lib');
 const platform = require('../../../platform');
@@ -53,6 +54,28 @@ async function announceAndLaunch(messageId, threadId, cwd) {
 // resumeSid 有值时走 `claude --resume <旧id>`（恢复历史会话），否则新建一个会话。
 async function launchWindow(threadId, messageId, cwd, resumeSid) {
   const crypto = require('crypto');
+
+  // 目录不存在必须在这里拦下。
+  // 历史会话的 cwd 可能早就被删了（比如临时验证目录 _pprobe）。
+  // 早先这种 cwd 会让 claude 在继承来的当前目录里起来——用户看到一个
+  // 跟自己完全无关的会话，而且界面上没有任何报错。
+  if (!cwd || !fs.existsSync(cwd)) {
+    lib.log('error', `开窗中止：目录不存在 ${cwd}`);
+    replyCard(messageId, {
+      schema: '2.0',
+      config: { wide_screen_mode: true },
+      header: { title: { tag: 'plain_text', content: '目录不存在' }, template: 'red' },
+      body: {
+        elements: [
+          { tag: 'markdown', content: `📁 \`${cwd || '(空)'}\`` },
+          { tag: 'hr' },
+          { tag: 'markdown', content: '这个会话记录里的工作目录已经被删除或移走了。' },
+          { tag: 'markdown', content: '换成另一个会话，或先在这个话题里发一条新消息重新选工作区。' },
+        ],
+      },
+    });
+    return;
+  }
   // 恢复会话时，Claude 侧沿用旧的 sessionId；映射也必须用同一个 id，
   // 否则 SessionStart hook 注册上来的记录对不上，话题就路由不到。
   const sessionId = resumeSid || crypto.randomUUID();
