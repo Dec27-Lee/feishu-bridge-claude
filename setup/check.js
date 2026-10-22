@@ -162,6 +162,20 @@ if (settings) {
     '没有它，窗口会拒收来自桥接的投递（且毫无报错）。install.js 会替你加上。');
 }
 
+// ---- 7. 项目位置 ----
+
+// 这个目录本身就是运行时：hooks 里写的是它的绝对路径，自启项指向它，
+// 正在跑的进程也是从这里加载的。放在临时目录/下载目录里，迟早会被清掉或搬走。
+{
+  const bad = [
+    [/[\\/](Temp|tmp|Downloads|下载|Desktop|桌面)[\\/]/i, '临时目录、下载目录或桌面'],
+    [/[\\/]AppData[\\/]Local[\\/]Temp/i, 'Windows 临时目录'],
+  ];
+  const hit = bad.find(([re]) => re.test(ROOT));
+  add('info', 'location', true, '项目位置', ROOT,
+    hit ? `⚠️ 看起来在${hit[1]}。这个目录就是实际运行的程序，建议换到长期位置：node setup/move.js <新目录>` : '');
+}
+
 // ---- 输出 ----
 
 const blocking = checks.filter((c) => c.level === 'required' && !c.ok);

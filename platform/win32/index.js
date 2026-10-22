@@ -58,6 +58,33 @@ module.exports = {
     presenceChild = null;
   },
 
+  // 收掉「本目录下」的采样器，包括上一个 bridge 留下的孤儿进程。
+  //
+  // stopPresence() 只能杀本进程的直系子进程。采样器是 detached 启动的——
+  // bridge 被强杀或换掉之后，它会继续活着并每秒写 data/presence.json。
+  // 迁移目录时这既占着目标目录，又会让新实例读到旧路径的数据，必须先清掉。
+  stopAllPresence() {
+    const exe = path.join(HERE, 'presence.exe').toLowerCase();
+    const killed = [];
+    try {
+      const ps = spawnSync('powershell.exe', ['-NoProfile', '-Command',
+        "Get-CimInstance Win32_Process -Filter \"Name='presence.exe'\" | "
+        + 'Select-Object ProcessId,ExecutablePath | ConvertTo-Json -Compress',
+      ], { encoding: 'utf8', timeout: 20000, windowsHide: true });
+      const raw = (ps.stdout || '').trim();
+      if (!raw) return killed;
+      const rows = [].concat(JSON.parse(raw));
+      for (const r of rows) {
+        if (!r || !r.ProcessId) continue;
+        if (String(r.ExecutablePath || '').toLowerCase() !== exe) continue;   // 不是本项目的
+        try { process.kill(r.ProcessId); killed.push(r.ProcessId); } catch (_) {}
+      }
+    } catch (_) {}
+    try { if (presenceChild) presenceChild.kill(); } catch (_) {}
+    presenceChild = null;
+    return killed;
+  },
+
   // 新开一个 Windows Terminal 窗口跑 claude。
   // VBS 负责两件事：清空继承来的 CLAUDECODE / *_SESSION_ID 等环境变量
   // （否则新窗口会关掉转录保存、或把 inbox 指到错误的会话上），以及 cd 到目标目录。

@@ -56,6 +56,24 @@ module.exports = {
     presenceChild = null;
   },
 
+  // 收掉本目录下的采样器，含上一个 bridge 留下的孤儿进程。
+  // detached 启动的采样器不会随 bridge 退出，迁移目录前必须清掉。
+  stopAllPresence() {
+    const killed = [];
+    try {
+      const ps = spawnSync('ps', ['-ax', '-o', 'pid=,command='], { encoding: 'utf8', timeout: 10000 });
+      for (const line of (ps.stdout || '').split('\n')) {
+        if (!line.includes(PRESENCE_SH)) continue;
+        const pid = parseInt(line.trim().split(/\s+/)[0], 10);
+        if (!pid || pid === process.pid) continue;
+        try { process.kill(pid); killed.push(pid); } catch (_) {}
+      }
+    } catch (_) {}
+    try { if (presenceChild) presenceChild.kill(); } catch (_) {}
+    presenceChild = null;
+    return killed;
+  },
+
   spawnWindow({ sessionId, cwd, resumeId }) {
     if (!fs.existsSync(LAUNCH_SH)) throw new Error(`缺少 ${LAUNCH_SH}`);
     const args = [LAUNCH_SH, sessionId, cwd];

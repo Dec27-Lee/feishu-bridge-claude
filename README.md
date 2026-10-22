@@ -19,6 +19,10 @@
 
 ## 快速开始
 
+> **先定好放在哪个目录再装。** 这个项目装完就是你电脑上实际运行的程序——
+> 开机自启、每个窗口的 hook 调的都是这个目录。别 clone 到桌面或下载目录里就开装。
+> 以后要换位置也不用重装：`node setup/move.js <新目录>`。
+
 ```bash
 git clone https://github.com/Dec27-Lee/feishu-bridge-claude.git
 cd feishu-bridge-claude
@@ -33,6 +37,16 @@ npm start          # 启动
 ```bash
 node setup/update.js
 ```
+
+想换个目录放（搬家）：
+
+```bash
+node setup/move.js D:/tools/feishu-bridge-claude            # 演练
+node setup/move.js D:/tools/feishu-bridge-claude --yes      # 真搬
+```
+
+它会停掉旧位置的进程、复制、把 hooks / cc-switch / 开机自启改指到新位置、再启动体检。
+**别手工拖文件夹**——路径被写在四处，漏一处就会「看着在跑，改代码没反应」。
 
 需要 Node.js ≥ 18（推荐 22+）和一个飞书自建应用的机器人。
 飞书那边的准备（应用、权限、事件订阅、群）见 `CLAUDE.md` 步骤 2，**那部分必须你手动做**。

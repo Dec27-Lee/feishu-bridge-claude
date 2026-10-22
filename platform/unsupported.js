@@ -14,6 +14,7 @@ module.exports = {
   startPresence() { return false; },
   presenceRunning() { return false; },
   stopPresence() {},
+  stopAllPresence() { return []; },
 
   spawnWindow() {
     throw new Error(

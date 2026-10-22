@@ -556,6 +556,38 @@ async function main() {
       sent.some((o) => o.kind === 'send') && !!(tr && tr.threadId), tr ? tr.threadId : '无归属记录');
   }
 
+  console.log('\n9d. 项目挪过位置后 hooks 要改指到新位置');
+  {
+    // 搬目录后旧 hook 指向不存在的路径。只加不删的话，每个事件会跑两遍：
+    // 一遍报「找不到文件」，一遍正常工作——这是最难查的那类问题。
+    const hooksCfg = require(path.join(ROOT, 'setup', 'hooks-config.js'));
+    const stale = {
+      crossSessionInbound: 'accept',
+      hooks: {
+        UserPromptSubmit: [{ hooks: [{ type: 'command', command: 'codegraph prompt-hook' }] }],
+        SessionStart: [{ hooks: [{ type: 'command',
+          command: 'node D:/OldPlace/plugins/core/session-start.js', timeout: 10 }] }],
+        Stop: [{ hooks: [{ type: 'command',
+          command: 'node D:/OldPlace/plugins/notify/hooks/notify.js', timeout: 25 }] }],
+      },
+    };
+
+    const r1 = hooksCfg.mergeInto(stale);
+    const cmds = (ev) => (r1.settings.hooks[ev] || []).flatMap((e) => e.hooks.map((h) => h.command));
+    check('旧位置的 hook 被摘掉', !cmds('SessionStart').some((c) => c.includes('OldPlace'))
+      && !cmds('Stop').some((c) => c.includes('OldPlace')), cmds('SessionStart').join(','));
+    check('用户自己的 hook 一条不动',
+      cmds('UserPromptSubmit').includes('codegraph prompt-hook'), cmds('UserPromptSubmit').join(','));
+    check('新位置补齐了全部 5 个事件',
+      ['SessionStart', 'PreToolUse', 'PermissionRequest', 'Stop', 'Notification']
+        .every((e) => cmds(e).length === 1), '');
+
+    // 原样重跑必须幂等，否则每次 check/install 都会重写一遍 settings.json
+    const r2 = hooksCfg.mergeInto(r1.settings);
+    check('重复安装是幂等的', r2.added.length === 0 && r2.removed.length === 0,
+      `added=${r2.added.length} removed=${r2.removed.length}`);
+  }
+
   console.log('\n10. 关停与残留锁接管');
   // Windows 上 kill() 是终止进程，SIGTERM 处理器不会跑，pid 文件必然残留。
   // 所以这里验证的不是「锁被清掉」，而是「下一个实例能把残留锁接管掉」——

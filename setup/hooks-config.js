@@ -43,10 +43,49 @@ const HOOKS = {
   ],
 };
 
-// 把这些 hook 合并进一份 settings 对象（不覆盖用户已有的其他 hook）。
-// 同一个事件下，如果已有完全相同的 command 就跳过，保证可重复执行。
-function mergeInto(settings) {
+// 本项目的 hook 脚本（相对项目根）。判据是**相对路径**而不是绝对路径：
+// 项目被移动过之后，旧记录的绝对路径已经指向不存在的文件，
+// 但「这条 hook 是谁装的」这个问题，只能靠脚本名回答。
+const OWN_SCRIPTS = Object.values(HOOKS).map((entries) => entries[0].hooks[0].command
+  .slice(NODE.length + 1).replace(/^.*?(?=plugins\/)/, ''));
+
+function isOwnCommand(cmd) {
+  const c = String(cmd || '').replace(/\\/g, '/');
+  return OWN_SCRIPTS.some((s) => c.endsWith(s) || c.includes(s));
+}
+
+// 摘掉本项目「指向别处」的 hook——旧位置、已失效路径。
+//
+// 为什么需要：如果只做「同样的 command 就跳过」，项目一被移动，
+// 旧路径的 hook 留着、新路径的 hook 又加一份，每个事件会跑两遍：
+// 一遍报「找不到文件」，一遍正常工作。日志里全是噪音，排查时极难想到。
+// 只判断「是不是本项目的脚本」而不看目录，所以项目被搬过几次都能收拾干净；
+// 用户自己的 hook（比如 codegraph）一条不碰。
+function stripOwn(settings) {
   const out = JSON.parse(JSON.stringify(settings || {}));
+  const want = new Set(Object.values(HOOKS).map((e) => e[0].hooks[0].command));
+  const removed = [];
+  for (const [event, entries] of Object.entries(out.hooks || {})) {
+    if (!Array.isArray(entries)) continue;
+    out.hooks[event] = entries.filter((e) => {
+      const hooks = (e && e.hooks) || [];
+      const stale = hooks.length > 0 && hooks.every(
+        (h) => isOwnCommand(h && h.command) && !want.has(h.command));
+      if (stale) removed.push(`${event}: ${hooks[0].command}`);
+      return !stale;
+    });
+    if (!out.hooks[event].length) delete out.hooks[event];
+  }
+  return { settings: out, removed };
+}
+
+// 把这些 hook 合并进一份 settings 对象（不覆盖用户已有的其他 hook）。
+// 先摘掉本项目指向旧位置的条目再加入，保证两件事：
+//   · 项目挪过位置时不会留双份
+//   · 原样重跑是幂等的（已指向当前项目的条目不动）
+function mergeInto(settings) {
+  const { settings: base, removed } = stripOwn(settings);
+  const out = JSON.parse(JSON.stringify(base));
   out.hooks = out.hooks || {};
 
   const added = [];
@@ -62,10 +101,10 @@ function mergeInto(settings) {
       added.push(`${event}: ${cmd}`);
     }
   }
-  return { settings: out, added };
-}
+  return { settings: out, added, removed };
+};
 
-// 判断一份 settings 里是否已经装齐
+// 判断一份 settings 里是否已经装齐（且指向当前项目目录）
 function installed(settings) {
   if (!settings || !settings.hooks) return false;
   return Object.entries(HOOKS).every(([event, entries]) =>
@@ -73,4 +112,23 @@ function installed(settings) {
       (e.hooks || []).some((h) => h.command === entries[0].hooks[0].command)));
 }
 
-module.exports = { HOOKS, ROOT, mergeInto, installed, paths: { ask: p('plugins/ask/hooks/ask-question.js') } };
+// 装是装了，但指向的可能是别处。返回那些指向非当前项目的本项目 hook。
+function staleEntries(settings) {
+  const want = new Set(Object.values(HOOKS).map((e) => e[0].hooks[0].command));
+  const found = [];
+  for (const [event, entries] of Object.entries((settings || {}).hooks || {})) {
+    for (const e of entries || []) {
+      for (const h of (e && e.hooks) || []) {
+        if (isOwnCommand(h && h.command) && !want.has(h.command)) {
+          found.push({ event, command: h.command });
+        }
+      }
+    }
+  }
+  return found;
+}
+
+module.exports = {
+  HOOKS, ROOT, mergeInto, installed, stripOwn, staleEntries, isOwnCommand, OWN_SCRIPTS,
+  paths: { ask: p('plugins/ask/hooks/ask-question.js') },
+};

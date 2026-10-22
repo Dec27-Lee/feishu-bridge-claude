@@ -40,6 +40,24 @@ CLAUDE.md
 
 ---
 
+## ⚠️ 动手之前：先确定项目放在哪
+
+**这个目录不是「从别处运行的安装包」，它就是运行时本体。** 装完以后每次开机执行的、
+每个 window 的 hook 调用的，都是这个目录里的文件。所以：
+
+- 装之前就要问用户：**放在哪？**（不要把 `git clone` 到桌面/下载目录/临时目录里就开装）
+- 一旦装好，路径就被写进了四处：`~/.claude/settings.json` 的 hooks、
+  cc-switch 每个服务商的配置、开机自启项、正在跑的进程。
+- 之后**再搬文件夹就必须跑 `node setup/move.js`**，不能手工拖。
+
+给用户的说法（照抄即可）：
+
+> 这个项目安装后就是你电脑上实际运行的程序，所以**先定好放在哪个目录再装**。
+> 建议放在一个长期不动的位置，例如 `D:\tools\feishu-bridge-claude` 或 `~/apps/feishu-bridge-claude`。
+> 以后要换位置也不用重装，跑一次 `node setup/move.js <新目录>` 就行。
+
+---
+
 ## 安装：按这个顺序做
 
 每一步都给了「怎么做」和「怎么算成功」。**不要跳过验证**。
@@ -209,6 +227,33 @@ Windows 会在启动文件夹放一个快捷方式指向 `watch-bridge.vbs`（�
 
 ---
 
+## 搬家（用户想换目录时）
+
+**不要手工拖文件夹。** 项目根路径被写进四处，手拖必然留下指向旧位置的记录，
+症状是「看着还在跑，但改代码没反应」——最难查的一类问题。
+
+```bash
+node setup/move.js D:/tools/feishu-bridge-claude            # 演练，只说要做什么
+node setup/move.js D:/tools/feishu-bridge-claude --yes      # 真的搬
+node setup/move.js D:/tools/feishu-bridge-claude --yes --delete-old   # 搬完删旧目录
+```
+
+它按「先停 → 再复制 → 改指向 → 最后才删旧」的顺序做：
+
+1. **停进程**：bridge、在场采样器，**以及 `watch-bridge.vbs`**。
+   不杀守护进程的话，它 5 秒后会把旧位置的代码重新拉起来。
+2. **卸旧自启**：否则每次开机都拉起旧目录。
+3. **复制**：旧目录在复制期间始终完整，任何一步失败都能退回去。
+4. **改指向**：`install.js --hooks` 会摘掉本项目指向旧位置的 hook 再加入新的
+   （判据是脚本名，不看目录，所以搬过几次都能收拾干净）；
+   `--cc-switch` 补每个服务商；`--autostart` 重建自启项。
+5. **在新位置启动 + `verify.js` 体检**。
+6. 加 `--delete-old` 时，**先确认新位置的 bridge 真的在跑**才删旧目录。
+
+**给用户的话**：搬家前先关掉正在跑飞书桥接的窗口，搬完 `cd` 到新目录再继续。
+
+---
+
 ## 更新项目
 
 用户不是在维护这个项目，所以**更新必须是一条命令**，不能让他手动 git pull：
@@ -237,6 +282,7 @@ node setup/update.js            # 拉取 → 迁移配置 → 检查 hooks 路�
 | 看体检 | `node setup/check.js` |
 | 联调（真调飞书 API，只读） | `node setup/verify.js` |
 | 更新项目并迁移配置 | `node setup/update.js` |
+| 换目录 | `node setup/move.js <新目录> [--yes] [--delete-old]` |
 | 自测（不碰真实配置） | `node setup/selftest/run.js` |
 | 看全部可配项 | `node kernel/config.js --dump` |
 | 重启 | `Stop-Process -Id (Get-Content data/bridge.pid) -Force`（自启会拉回来） |
@@ -344,6 +390,7 @@ setup/            安装、联调、更新、自测（都是给 AI 用的）
   install.js      安装器，--dry-run 先看要改什么
   verify.js       联调（真调飞书 API，只读）
   update.js       更新项目 + 迁移配置
+  move.js         换目录：停进程 → 复制 → 改 hooks/cc-switch/自启 → 重启 → 体检
   hooks-config.js hooks 内容定义（settings 和 cc-switch 共用同一份）
   selftest/       沙箱自测：伪造 lark-cli 跑通主链路，不碰真实配置
 

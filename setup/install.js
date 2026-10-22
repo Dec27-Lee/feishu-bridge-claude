@@ -73,7 +73,7 @@ function installHooks() {
   }
 
   const hooksCfg = require('./hooks-config');
-  const { settings: next, added } = hooksCfg.mergeInto(settings);
+  const { settings: next, added, removed } = hooksCfg.mergeInto(settings);
 
   // crossSessionInbound 不在就补上：没有它窗口会拒收投递，而且毫无报错
   let inboundNote = '';
@@ -82,11 +82,17 @@ function installHooks() {
     next.crossSessionInbound = 'accept';
   }
 
-  if (!added.length && !inboundNote) {
+  if (!added.length && !removed.length && !inboundNote) {
     say('  hooks 已是最新，无需改动');
     return true;
   }
 
+  // 项目被移动过时，旧绝对路径的条目必须先摘掉再加入新的——
+  // 否则每个事件会跑两遍：一遍报找不到文件，一遍正常工作。
+  if (removed.length) {
+    say('  将先移除本项目原有的 hook（路径可能已失效，或是旧位置）：');
+    removed.forEach((r) => say(`    - ${r}`));
+  }
   say('  将要添加：');
   added.forEach((a) => say(`    + ${a}`));
   if (inboundNote) say(`    ~ ${inboundNote}`);

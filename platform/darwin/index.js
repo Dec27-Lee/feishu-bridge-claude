@@ -56,6 +56,25 @@ module.exports = {
     presenceChild = null;
   },
 
+  // 收掉本目录下的采样器，含上一个 bridge 留下的孤儿进程。
+  // detached 启动的采样器不会随 bridge 退出，迁移目录前必须清掉，
+  // 否则它会一直往旧路径写 data/presence.json，新实例读到过期数据。
+  stopAllPresence() {
+    const killed = [];
+    try {
+      const ps = spawnSync('ps', ['-ax', '-o', 'pid=,command='], { encoding: 'utf8', timeout: 10000 });
+      for (const line of (ps.stdout || '').split('\n')) {
+        if (!line.includes(PRESENCE_SH)) continue;
+        const pid = parseInt(line.trim().split(/\s+/)[0], 10);
+        if (!pid || pid === process.pid) continue;
+        try { process.kill(pid); killed.push(pid); } catch (_) {}
+      }
+    } catch (_) {}
+    try { if (presenceChild) presenceChild.kill(); } catch (_) {}
+    presenceChild = null;
+    return killed;
+  },
+
   // 新开一个 Terminal/iTerm 窗口跑 claude。
   // 脚本负责清空继承来的 CLAUDE* 会话变量——不清的话新窗口会关掉转录保存。
   spawnWindow({ sessionId, cwd, resumeId }) {
