@@ -805,8 +805,105 @@ function pinThreadRoot(rootMessageId) {
   }
 }
 
+// 从转录里取「用户这一轮在终端里敲的话」。
+//
+// 为什么需要：Claude Code 的 Stop hook 只给 `last_assistant_message`，
+// **不给用户发了什么**。所以人坐在电脑前敲的那句话，飞书那头是完全看不见的——
+// 手机上只看到 AI 的回答，不知道在回答什么。
+//
+// 难的是把「人敲的」和「系统塞进来的」分开。实测转录里 user 角色混着这些：
+//
+//   <task-notification>…</task-notification>   后台任务完成回执（最多，最容易误判）
+//   <pasted_content id="…">…</pasted_content>  粘贴块的包装（里面是**人写的东西**）
+//   [Image #3] / [Image: source: …]            贴图占位符，后面常跟着人说的话
+//   <local-command-stdout> / <command-name>    斜杠命令回显
+//   <system-reminder>…</system-reminder>       系统注入
+//   [Your previous response had no visible…]   harness 的补话提示
+//   [Request interrupted by user]              中断标记
+//   tool_result（数组形态）                     工具回执
+//
+// 所以规则不是「以 < 开头就丢」——那样会把 task-notification 留下、
+// 把 user 自己贴的东西也误杀。做法是：**先剥掉纯系统块，剩下的再看还有没有实质内容。**
+function lastUserInput(file, maxBytes = 4 * 1024 * 1024) {
+  // 整段就是系统产物，剥完什么都不剩 → 丢弃
+  const PURE_SYSTEM = [
+    /^\s*<task-notification>[\s\S]*<\/task-notification>\s*$/,
+    /^\s*<system-reminder>[\s\S]*<\/system-reminder>\s*$/,
+    /^\s*<local-command-(?:caveat|stdout)>[\s\S]*$/,
+    /^\s*<command-name>[\s\S]*$/,
+    /^\s*\[Your previous response had no visible output[^\]]*\]\s*$/,
+    /^\s*\[Request interrupted by user[^\]]*\]\s*$/,
+    /^\s*This session is being continued[\s\S]*$/,
+    /^\s*Caveat: The messages below were generated[\s\S]*$/,
+  ];
+
+  // 桥接投递的（本来就是从飞书来的，再推回飞书是回音）。
+  // 两种形态都要认：我们自己的信封标记，以及 Claude Code 连接层加的那句英文前缀
+  // （更早版本、或者别的窗口用跨会话通道发的时候只有这句）。
+  const FROM_FEISHU = [
+    '[来自用户本人 · 飞书]',
+    'Another Claude session sent a message',
+  ];
+
+  // 只剥包装、保留里面内容（这些是**人**产生的东西，不是系统噪声）
+  function unwrap(t) {
+    return t
+      .replace(/<pasted_content[^>]*>/g, '').replace(/<\/pasted_content>/g, '')
+      .replace(/\s*\[Image #\d+\]\s*/g, '\n')
+      .replace(/\s*\[Image: [^\]]*\]\s*/g, '\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+  }
+
+  function textOf(c) {
+    if (typeof c === 'string') return c;
+    if (Array.isArray(c)) {
+      return c.filter((x) => x && x.type === 'text' && typeof x.text === 'string')
+        .map((x) => x.text).join('\n');
+    }
+    return '';
+  }
+
+  try {
+    const size = fs.statSync(file).size;
+    const start = Math.max(0, size - maxBytes);
+    const len = size - start;
+    if (len <= 0) return null;
+    const buf = Buffer.alloc(len);
+    const fd = fs.openSync(file, 'r');
+    try { fs.readSync(fd, buf, 0, len, start); } finally { fs.closeSync(fd); }
+
+    let text = buf.toString('utf8');
+    // 从行边界开始：文件尾部截断出来的第一行必然是半截 JSON
+    if (start > 0) text = text.slice(text.indexOf('\n') + 1);
+
+    const lines = text.split('\n');
+    for (let i = lines.length - 1; i >= 0; i -= 1) {
+      if (!lines[i].trim()) continue;
+      let d;
+      try { d = JSON.parse(lines[i]); } catch (_) { continue; }
+      if (!d || d.type !== 'user') continue;
+      if (d.isCompactSummary) continue;
+
+      const c = d.message && d.message.content;
+      if (Array.isArray(c) && c.some((x) => x && x.type === 'tool_result')) continue;
+
+      const raw = textOf(c).trim();
+      if (!raw) continue;
+      if (PURE_SYSTEM.some((re) => re.test(raw))) continue;
+
+      const t = unwrap(raw);
+      if (!t) continue;
+      if (FROM_FEISHU.some((m) => t.includes(m))) continue;   // 这轮是飞书发起的，别回音
+      return t;
+    }
+  } catch (_) {}
+  return null;
+}
+
 module.exports = {
   cleanup,
+  lastUserInput,
   readThreadRoot, writeThreadRoot, pinThreadRoot,
   discoverWorkspaces, normalizePath, isTrusted, discoverSessions,
   workspaceKey, trustWorkspace,

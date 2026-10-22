@@ -609,6 +609,46 @@ async function main() {
     check('进度条与百分比始终一致', mismatch === 0, `${mismatch} 处不一致`);
   }
 
+  console.log('\n9f. 识别「用户这一轮在终端里说了什么」');
+  {
+    // Stop hook 的 stdin 里没有用户输入，只能从转录尾部反查。
+    // 难点全在「把系统注入的文本排除掉」——转录里 user 角色混着一大堆
+    // task-notification / pasted_content / 图片占位符 / 斜杠命令回显。
+    const { lastUserInput } = require(path.join(ROOT, 'kernel', 'lib.js'));
+    const tf = path.join(p.dir, 'transcript.jsonl');
+    const line = (obj) => JSON.stringify(obj) + '\n';
+    const u = (content, extra) => line({ type: 'user', message: { role: 'user', content }, ...(extra || {}) });
+    const a = (text) => line({ type: 'assistant', message: { role: 'assistant', content: text } });
+
+    const cases = [
+      ['纯文本', u('帮我改个 bug'), '帮我改个 bug'],
+      ['工具回执不算', u([{ type: 'tool_result', content: 'ok' }]), null],
+      ['后台任务回执不算',
+        u('<task-notification>\n<task-id>x</task-id>\n</task-notification>'), null],
+      ['斜杠命令回显不算', u('<local-command-stdout>Compacted</local-command-stdout>'), null],
+      ['系统提醒不算', u('<system-reminder>The user named this</system-reminder>'), null],
+      ['中断标记不算', u('[Request interrupted by user]'), null],
+      ['compact 摘要不算', u('This session is being continued from a previous one'), null],
+      ['飞书来信不回音', u('[来自用户本人 · 飞书]（下面这段…）\n\n你好'), null],
+      ['跨会话前缀不回音', u('Another Claude session sent a message:\n\n你好'), null],
+      ['粘贴块保留内容', u('<pasted_content id="a1">\n日志如下\n</pasted_content>'), '日志如下'],
+      ['图片占位符剥掉、留下文字', u('[Image #3] 这个样式不对'), '这个样式不对'],
+    ];
+
+    for (const [label, msg, expect] of cases) {
+      fs.writeFileSync(tf, a('回答') + msg, 'utf8');
+      const got = lastUserInput(tf);
+      const ok = expect === null ? got === null : (got !== null && got.includes(expect));
+      check(`终端输入识别 · ${label}`, ok, ok ? '' : `期望 ${JSON.stringify(expect)}，实际 ${JSON.stringify(got)}`);
+    }
+
+    // 真实场景：中间夹着工具回执，得一路往前跳到人那句话
+    fs.writeFileSync(tf,
+      a('第一轮') + u('继续改') + a('第二轮')
+      + u([{ type: 'tool_result', content: 'ok' }]) + a('还在改'), 'utf8');
+    check('跳过工具回执找到人那句话', lastUserInput(tf) === '继续改', lastUserInput(tf));
+  }
+
   console.log('\n10. 关停与残留锁接管');
   // Windows 上 kill() 是终止进程，SIGTERM 处理器不会跑，pid 文件必然残留。
   // 所以这里验证的不是「锁被清掉」，而是「下一个实例能把残留锁接管掉」——

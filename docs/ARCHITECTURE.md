@@ -343,6 +343,32 @@ Claude Code 触发 PreToolUse(AskUserQuestion)
 查这类问题的顺序：`data/threads/<sessionId>.json` 有没有 → 该文件里的 `threadId`
 是否等于用户正在看的那个话题 → 对应 `mapping.jsonl` 里 `via: 'thread'` 的条目是否指向同一棵树。
 
+### 8.4 反查「用户这一轮在终端里说了什么」
+
+Claude Code 的 **Stop hook 只给 `last_assistant_message`，不给用户输入**。
+所以人坐在电脑前敲的那句话，飞书那头天然看不见——手机上只看到 AI 在自说自话。
+
+唯一的来源是转录文件（`transcript_path` 由 hook stdin 提供）：
+`kernel/lib.js` 的 `lastUserInput()` 从**尾部往前**扫，取第一条「人打的」消息。
+
+难点全在过滤，因为转录里 `type: "user"` 混着大量系统注入：
+
+| 形态 | 处理 |
+| --- | --- |
+| `tool_result`（数组形态） | 跳过 |
+| `<task-notification>…</task-notification>` | 整条丢弃（最多的一种，最容易误判） |
+| `<system-reminder>` / `<local-command-stdout>` / `<command-name>` | 整条丢弃 |
+| `[Your previous response had no visible output…]` / `[Request interrupted by user]` | 整条丢弃 |
+| `isCompactSummary` 的摘要 | 跳过 |
+| `<pasted_content>…</pasted_content>` | **剥壳保留内容**——里面是用户自己粘的东西 |
+| `[Image #3]` / `[Image: source: …]` | 剥掉占位符，留下同一行的文字 |
+| 正文含 `[来自用户本人 · 飞书]` 或 `Another Claude session sent a message` | 跳过（这轮是飞书发起的，推回去是回音） |
+
+**规则不是「以 `<` 开头就丢」。** 那样会漏掉 task-notification（它不是以 `<` 无关，
+而是与其误杀用户粘贴的内容），正好两边都错。判断依据是「剥掉系统块之后还剩不剩东西」。
+
+新增一种注入形态时，**先在这张表里补一行，再改代码**——这跟事件表是同一个规矩。
+
 ## 九、安全边界（必须遵守）
 
 这个项目的 hook 会**代替你**回答提问、放行工具调用。所以：

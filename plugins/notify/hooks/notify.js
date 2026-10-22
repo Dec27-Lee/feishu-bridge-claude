@@ -72,7 +72,7 @@ function splitText(text, size) {
   return chunks;
 }
 
-function buildCard({ name, cwd, body, index, total, continued, stats }) {
+function buildCard({ name, cwd, body, index, total, continued, stats, userSaid }) {
   // 首条卡片标题直接取窗口名，飞书据此生成话题名（话题名 = 会话名）。
   // 状态一律用标题栏颜色表达，标题文字里不再放 emoji 或状态词。
   const title = !continued
@@ -90,6 +90,18 @@ function buildCard({ name, cwd, body, index, total, continued, stats }) {
     });
     // 与 📁/🕐 一样，上下文行前面也带个图标；📦 取「上下文容器」之意
     if (stats) elements.push({ tag: 'markdown', content: `📦 ${stats}` });
+
+    // 人在终端里敲的那句话。手机上看不到终端，没有它就不知道这轮在回答什么。
+    if (userSaid) {
+      const q = userSaid.length > 300 ? userSaid.slice(0, 300) + '…' : userSaid;
+      elements.push({ tag: 'hr' });
+      elements.push({ tag: 'markdown', content: '💬 **你在终端里说**' });
+      // 每行前面加 │，手机上没有 blockquote 样式，靠这个做出引用块的感觉
+      elements.push({
+        tag: 'markdown',
+        content: q.split('\n').map((l) => `<font color='grey'>│ ${l}</font>`).join('\n'),
+      });
+    }
     elements.push({ tag: 'hr' });
   }
   elements.push({ tag: 'markdown', content: body });
@@ -125,6 +137,12 @@ const name = nameInfo.name;
 const chunks = splitText(text, my.chunkChars || 4000);
 const stats = lib.statsLine(input.transcript_path, cfg);
 
+// 人坐在终端里敲的那句话。Stop hook 的 stdin 里没有它，只能从转录尾部反查。
+// 这一轮是飞书发起的时返回 null（那句话本来就在飞书上，推回来是回音）。
+const userSaid = my.showUserPrompt === false
+  ? null
+  : lib.lastUserInput(input.transcript_path);
+
 let sent = 0;
 // 同一窗口复用同一个常驻话题：首次通知开话题，之后所有通知都接进去
 const saved = my.threadMode !== false ? lib.readThreadRoot(realSid) : null;
@@ -157,7 +175,11 @@ if (threadRoot && namedWithFallback && nameInfo.fromAiTitle && !userPickedThread
 let reused = !!threadRoot;
 
 chunks.forEach((chunk, i) => {
-  const card = buildCard({ name, cwd, body: chunk, index: i + 1, total: chunks.length, continued: reused, stats });
+  const card = buildCard({
+    name, cwd, body: chunk, index: i + 1, total: chunks.length, continued: reused, stats,
+    // 只挂第一张卡：分段时后面几张重复同一句话没有意义
+    userSaid: i === 0 ? userSaid : null,
+  });
   let payload = JSON.stringify(card);
 
   // 卡片请求体上限 30KB，极端情况下再压缩本段
