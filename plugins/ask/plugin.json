@@ -1,6 +1,6 @@
 {
   "id": "ask",
-  "name": "提问代答",
+  "name": "窗口提问",
   "version": "1.0.0",
   "description": "把 Claude Code 的选择题搬到飞书：人在电脑前就让弹窗留在终端，人不在就推卡片等你答。",
   "core": false,
@@ -28,9 +28,9 @@
       "type": "integer",
       "default": 1800,
       "minimum": 60,
-      "maximum": 5700,
+      "maximum": 1800,
       "title": "人不在时最多等多久",
-      "description": "默认 1800 秒（30 分钟）。必须小于 hook 超时（1900 秒），否则卡片还没等到就被系统收走。",
+      "description": "默认 1800 秒（30 分钟）。上限就是 1800：hook 超时是 1900 秒，填得更大只会让卡片还没等到就被系统先收走。",
       "ui:group": "等待",
       "ui:widget": "number"
     },

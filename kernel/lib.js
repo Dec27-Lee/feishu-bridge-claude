@@ -444,13 +444,27 @@ function trustWorkspace(cwd) {
   return { changed: true, key };
 }
 
-// 返回 [{ cwd, name, lastActive, sessions, trusted }]，按最近使用倒序。
+// 目录 → 别名 的反查表。别名只写在一个地方（config.json 的 launchAliases），
+// 这里把它翻过来给「候选卡片」用：卡片上看到 `tt · tt-design-space-ai`，
+// 你才知道原来还能发 `#tt` 直接指定。
+// 同一个目录起多个别名时取配置里写的第一个——卡片一行放不下两个。
+function aliasIndex(cfg = readConfig()) {
+  const map = new Map();
+  for (const [name, dir] of Object.entries(cfg.launchAliases || {})) {
+    const k = normalizePath(dir);
+    if (k && !map.has(k)) map.set(k, name);
+  }
+  return map;
+}
+
+// 返回 [{ cwd, name, lastActive, sessions, trusted, alias }]，按最近使用倒序。
 // trusted = 打开时不会弹信任确认框（见 needsTrustPrompt 的说明）。
 // 会弹框的目录在卡片上单独标注，远程场景下用户看不到终端，不能静默混在里面。
 function discoverWorkspaces(cfg = readConfig(), opts = {}) {
   const onlyTrusted = opts.onlyTrusted === true;
   const byPath = new Map();
   const trustSet = trustedPaths();
+  const aliasOf = aliasIndex(cfg);
 
   const add = (cwd, lastActive) => {
     const p = normalizePath(cwd);
@@ -506,7 +520,10 @@ function discoverWorkspaces(cfg = readConfig(), opts = {}) {
   for (const w of Object.values(cfg.launchAliases || {})) add(w, 0);
 
   let list = [...byPath.values()];
-  for (const w of list) w.trusted = isTrustedPath(w.cwd, trustSet);
+  for (const w of list) {
+    w.trusted = isTrustedPath(w.cwd, trustSet);
+    w.alias = aliasOf.get(normalizePath(w.cwd)) || null;
+  }
   list.sort((a, b) => b.lastActive - a.lastActive);
   if (onlyTrusted) list = list.filter((w) => w.trusted);
   return list;
@@ -911,7 +928,7 @@ module.exports = {
   cleanup,
   lastUserInput,
   readThreadRoot, writeThreadRoot, pinThreadRoot,
-  discoverWorkspaces, normalizePath, isTrusted, discoverSessions,
+  discoverWorkspaces, normalizePath, aliasIndex, isTrusted, discoverSessions,
   workspaceKey, trustWorkspace,
   tailStats: transcriptTotals, transcriptTotals, contextWindowSize, contextBar, statsLine, formatTokens,
   writePending, readPending, removePending,

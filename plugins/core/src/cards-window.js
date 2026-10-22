@@ -12,6 +12,14 @@ function shortLabel(cwd) {
   return parts.slice(-2).join('/');
 }
 
+// 候选按钮上的一行字：**有别名就只显示别名**。
+// 别名是用户自己起的短名字，比路径短、比路径好认；再说按钮宽度有限，
+// `tt · tt-design-space-ai` 这种拼接把两者都拉长了。完整路径在选中后的
+// 「已选择工作区」卡片上有（📁 ...），这里不必重复。
+function pickLabel(w) {
+  return w.alias || shortLabel(w.cwd);
+}
+
 function buildPickerCard(workspaces, threadId, note, kind) {
   const max = settings.get('pickMax');
   const list = workspaces.slice(0, max);
@@ -26,7 +34,7 @@ function buildPickerCard(workspaces, threadId, note, kind) {
     const mark = w.trusted ? '' : ' ⚠️需在电脑确认';
     elements.push({
       tag: 'button',
-      text: { tag: 'plain_text', content: `${i + 1}. ${shortLabel(w.cwd)}${mark}` },
+      text: { tag: 'plain_text', content: `${i + 1}. ${pickLabel(w)}${mark}` },
       type: i === 0 ? 'primary_filled' : 'default',
       width: 'fill',
       behaviors: [{
@@ -38,6 +46,7 @@ function buildPickerCard(workspaces, threadId, note, kind) {
 
   elements.push({ tag: 'hr' });
   // 卡片按钮依赖「回调配置」订阅；万一没订阅，直接回数字也能选，避免卡死
+  const aliases = list.map((w) => w.alias).filter(Boolean);
   elements.push({
     tag: 'markdown',
     content: [
@@ -45,7 +54,11 @@ function buildPickerCard(workspaces, threadId, note, kind) {
       workspaces.length > max
         ? `共发现 ${workspaces.length} 个，卡片最多放 ${max} 个，这里列前 ${max} 个。`
         : '',
-      '也可以发 `#目录名` 或 `#绝对路径` 直接指定。',
+      // 把实际存在的别名列出来，用户才能照着打
+      aliases.length
+        ? `也可以发别名直接指定：${aliases.slice(0, 6).map((a) => `\`#${a}\``).join('、')}`
+          + `${aliases.length > 6 ? ' 等' : ''}，或发 \`#绝对路径\`。`
+        : '也可以发 `#目录名` 或 `#绝对路径` 直接指定。',
     ].filter(Boolean).join('\n'),
   });
 
@@ -125,4 +138,4 @@ function buildReadyCard({ cwd, sessionId, resumed, threadId, messageId, note }) 
   };
 }
 
-module.exports = { shortLabel, buildPickerCard, buildPickedCard, buildReadyCard };
+module.exports = { shortLabel, pickLabel, buildPickerCard, buildPickedCard, buildReadyCard };

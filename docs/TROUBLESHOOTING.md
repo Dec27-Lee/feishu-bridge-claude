@@ -15,6 +15,7 @@
 | 换目录 | `node setup/move.js <新目录> [--yes] [--delete-old]` |
 | 自测（不碰真实配置） | `node setup/selftest/run.js` |
 | 看全部可配项 | `node kernel/config.js --dump` |
+| 网页上改配置 | `node setup/config-ui.js [--port 8787] [--no-open] [--idle-exit 0]`（详见 `docs/FEATURES.md` 第 11 节） |
 | 打印飞书权限/事件清单 | `node setup/feishu/scopes.js` |
 | 发 GitHub Release | `node setup/release.js [版本] [--dry-run]`（发版流程见 `CLAUDE.md`） |
 | 重启 | Windows：`Stop-Process -Id (Get-Content data/bridge.pid) -Force`<br>macOS / Linux：`kill $(cat data/bridge.pid)`<br>（装了自启会被自动拉回来） |
@@ -64,6 +65,12 @@
 | 新窗口开出来了但窗口留着一句「已退出进程」 | 正常现象 | 桥接只能关掉自己开的那个会话；窗口里的 `claude` 自己退出后，`cmd /k` 会保留标签页方便看报错。要关直接点标签页上的 ×，或在飞书里让桥接关（超时路径会自动关） |
 | 飞书里发的图，窗口收不到 | `logs/image.log`、`data/images/<日期>/` | 正文里应出现 `[图片] /...png`。若窗口只收到 `img_v3_xxx` 字面量，说明图片标记没被识别——见 `plugins/core/src/session.js` 的 `IMAGE_MARK_RE`（飞书目前是 markdown 写法 `![Image](img_xxx)`，早期是 `[Image: img_xxx]`，两种都要认） |
 | 图片文件越攒越多 | `imageTtlDays`（默认 7 天）、`data/images/` | 清理按**日期目录名**算，每小时一次。手工清理直接删 `data/images/<YYYYMMDD>/` 整个目录 |
+| 配置页改完没生效 | 点的是「保存」还是「保存并重启」 | 配置只在启动时解析一次。「保存」只写文件；要生效用「保存并重启」 |
+| 配置页点「保存并重启」失败 | 页面上的红字 | 它会先校验配置：有错就拒绝重启（否则进程停了新的起不来，就彻底失联）。按红字改完再试；`logs/error.log` 里有新进程起不来的原因 |
+| 配置页报「令牌无效」 | 地址里的 `t=` 参数 | 每次启动换一个令牌。用**当前**终端里打印的完整地址，别用收藏的旧地址 |
+| 配置页打不开 / 端口被占 | `--port` | 8787 被占时会自动换一个端口，看终端里打印的实际地址；也可以 `--port 9000` 指定 |
+| 配置页拒绝保存 | 弹窗里的红字 | 它和 `kernel/config.js --check` 用的是同一个 `validate`，按红字改；`config.json` 本身不是合法 JSON 时会禁止保存，先手工修好 |
+| 配置页改了值又改回去，文件里这个键没了 | 正常 | 值回到默认值就把该键删掉（省得文件越写越长）。没动过的键不会被动 |
 | macOS/Linux 上换目录后数据目录跟着跑的疑问 | — | `data/` 在项目目录内，`setup/move.js` 会连它一起搬到新位置；图片等历史数据不会丢 |
 
 ---

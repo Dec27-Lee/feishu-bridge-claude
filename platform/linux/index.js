@@ -14,6 +14,7 @@
 // 开窗失败会回一张红色卡片让你手动开。
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
 
@@ -115,5 +116,10 @@ module.exports = {
     kind: 'systemd-user',
     install: path.join(HERE, 'install-autostart.sh'),
     remove: path.join(HERE, 'remove-autostart.sh'),
+    // 装没装：systemd --user 单元文件在不在（与 install-autostart.sh 里的路径一致）
+    installed() {
+      const unit = path.join(os.homedir(), '.config', 'systemd', 'user', 'feishu-bridge.service');
+      try { return fs.existsSync(unit); } catch (_) { return false; }
+    },
   },
 };

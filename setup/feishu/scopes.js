@@ -23,9 +23,9 @@ const ARGS = new Set(process.argv.slice(2));
 
 // 每条权限对应代码里的哪一处调用。做排查时「为什么需要这个」比「它叫什么」更有用。
 const WHY = {
-  'im:message.group_msg': '收群里的消息（话题群里打字 → 桥接）',
+  'im:message.group_msg': '收群里的消息（话题群里打字 → 桥接）。「获取群组中所有消息」属高级权限，后台需单独申请开通',
   'im:message.p2p_msg:readonly': '收单聊消息（事件订阅的 schema 要求）',
-  'im:message:readonly': '读消息：卡片回调取 card_content、查话题根、下载图片',
+  'im:message:readonly': '读消息：卡片回调取 card_content、查话题根',
   'im:message:send_as_bot': '以机器人身份发卡片、回复、新建话题',
   'im:message:update': '作答后把卡片改成结果态（card/update）',
   'im:message.pins:write_only': '新窗口的话题置顶',

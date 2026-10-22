@@ -13,6 +13,7 @@
 //   2. 开机自启用 launchd 而不是启动文件夹
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
 
@@ -118,5 +119,10 @@ module.exports = {
     kind: 'launchd',
     install: path.join(HERE, 'install-autostart.sh'),
     remove: path.join(HERE, 'remove-autostart.sh'),
+    // 装没装：launchd 的 plist 在不在（标签与 install-autostart.sh 里保持一致）
+    installed() {
+      const plist = path.join(os.homedir(), 'Library', 'LaunchAgents', 'com.feishu.bridge.claude.plist');
+      try { return fs.existsSync(plist); } catch (_) { return false; }
+    },
   },
 };

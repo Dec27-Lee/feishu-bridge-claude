@@ -69,6 +69,9 @@ function mkSandbox() {
   for (const f of ['inbox.jsonl', 'outbox.jsonl', 'calls.jsonl']) {
     fs.writeFileSync(path.join(paths.mock, f), '');
   }
+  // 沙箱版的 ~/.claude.json。空 projects 是有意的：候选目录只能来自沙箱自己
+  // 造的那一个（见 3. 的 demo.jsonl），这样卡片内容才是可断言的。
+  fs.writeFileSync(path.join(paths.claude, '.claude.json'), JSON.stringify({ projects: {} }));
   return paths;
 }
 
@@ -80,6 +83,10 @@ function env(p, extra) {
     FEISHU_CONFIG: p.config,
     FEISHU_MOCK_DIR: p.mock,
     FEISHU_CLAUDE_HOME: p.claude,
+    // 沙箱必须把 ~/.claude.json 也隔离掉。它里面登记着本机真实用过的所有项目，
+    // discoverWorkspaces 会把这些目录全当成候选——候选卡片于是被真实目录填满，
+    // 沙箱自己造的那个目录反被挤到后面。以前没影响，是因为没有用例在意候选内容。
+    FEISHU_CLAUDE_JSON: path.join(p.claude, '.claude.json'),
     FEISHU_PRESENCE_FILE: path.join(p.data, 'presence.json'),
     // 把 away 档的等待压到 8 秒，让失败用例不至于卡满 60 秒（配置值本身仍是合法的 60）
     FEISHU_ASK_WAIT_MS: '8000',
@@ -282,6 +289,14 @@ async function main() {
   check('卡片是「选择工作区」', !!pickerCard, '');
   check('卡片带选项按钮',
     !!(pickerCard && JSON.stringify(pickerCard.card).includes('"type":"callback"')), '');
+  // 别名必须在候选里露出来：只藏在 config.json 里的话，用户不知道 #demo 能直达。
+  // 沙箱配置里把 demo 这个别名指向了 p.claude，它就是候选里唯一有别名的那条。
+  // 有别名时按钮上**只显示别名**，不拼路径——按钮宽度有限，拼接会把两者都拉长。
+  const cardJson = JSON.stringify((pickerCard && pickerCard.card) || {});
+  check('有别名的候选只显示别名',
+    cardJson.includes('"content":"1. demo') && !cardJson.includes('1. demo · '),
+    cardJson.slice(0, 260));
+  check('卡片底部列出可用的别名', cardJson.includes('#demo'), '');
 
   console.log('\n4. 回序号 → 开窗并绑定话题');
   fs.writeFileSync(path.join(p.data, 'pending', 'om_msg1.json'), JSON.stringify({
@@ -503,10 +518,22 @@ async function main() {
 
   // 坏值必须被拦住，而不是静默生效
   const badRange = cfgMod.validate(
-    { awayWaitSeconds: { type: 'integer', default: 1800, minimum: 60, maximum: 5700 } },
+    { awayWaitSeconds: { type: 'integer', default: 1800, minimum: 60, maximum: 1800 } },
     { awayWaitSeconds: 99999 },
   );
   check('越界值被拒绝', badRange.errors.length > 0, badRange.errors[0] || '');
+
+  // 等待上限必须落在 hook 超时之内。写死过 5700 秒，比 hook 的 1900 秒长得多——
+  // 配成那个区间，卡片还没等到就被系统先收走，而 schema 一路放行。
+  {
+    const HOOK_TIMEOUT_SEC = 1900;   // 与 setup/hooks-config.js 里两个阻塞 hook 一致
+    const over = [];
+    for (const m of require(path.join(ROOT, 'kernel', 'plugin.js')).discover()) {
+      const spec = (m.config || {}).awayWaitSeconds;
+      if (spec && spec.maximum > HOOK_TIMEOUT_SEC) over.push(`${m.id}=${spec.maximum}`);
+    }
+    check('等待上限不超过 hook 超时', over.length === 0, over.join(', '));
+  }
 
   const unknown = cfgMod.validate({ a: { type: 'boolean', default: true } }, { a: true, b: 1 });
   check('未知键只警告不报错', unknown.errors.length === 0 && unknown.warnings.length === 1,
@@ -861,6 +888,59 @@ async function main() {
             fs.existsSync(path.join(dir, d, 'om_img_e2e_1.png')));
         } catch (_) { return false; }
       })(), '');
+  }
+
+  console.log('\n9j. 可视化配置页');
+  {
+    // 配置页是 setup/ 下的独立进程，不是 plugins/ 下的插件——配置写坏时桥接根本
+    // 起不来，而那一刻正是最需要它的时候。所以这里不起 bridge，单独 spawn 探针。
+    //
+    // 探针在子进程里跑：kernel/lib 在 require 时就把 CONFIG_FILE 算死了，
+    // 本进程前面已经加载过它（指向沙箱前面用的那份），改环境变量追不回来。
+    //
+    // 顺带验证插件化：在沙箱插件目录里造一个从来没被代码提过的插件，
+    // 它必须自动出现在 /api/state 里——页面里写死插件名单就会在这里变红。
+    const uiPlugins = path.join(p.dir, 'ui-plugins');
+    fs.mkdirSync(path.join(uiPlugins, 'probe-demo'), { recursive: true });
+    fs.writeFileSync(path.join(uiPlugins, 'probe-demo', 'plugin.json'), JSON.stringify({
+      id: 'probe-demo',
+      name: '探针插件',
+      version: '0.0.1',
+      config: {
+        answer: {
+          type: 'integer', default: 42, minimum: 1, maximum: 99,
+          title: '探针数值', 'ui:group': '探针', 'ui:widget': 'number',
+        },
+      },
+      services: {},
+    }, null, 2));
+    for (const id of ['core', 'ask', 'notify', 'permission']) {
+      // 真插件的 hook 文件不用复制——本用例只读 schema，不加载插件
+      fs.cpSync(path.join(ROOT, 'plugins', id), path.join(uiPlugins, id), { recursive: true });
+    }
+
+    const uiCfg = path.join(p.dir, 'ui-config.json');
+    const probe = spawnSync(process.execPath,
+      [path.join(ROOT, 'setup', 'selftest', 'config-ui-probe.js')], {
+        cwd: ROOT,
+        encoding: 'utf8',
+        timeout: 60000,
+        env: {
+          ...process.env,
+          FEISHU_CONFIG: uiCfg,
+          FEISHU_DATA_DIR: p.data,
+          FEISHU_LOG_DIR: p.logs,
+          FEISHU_PLUGINS_DIR: uiPlugins,
+        },
+      });
+
+    let ui = [];
+    try { ui = JSON.parse((probe.stdout || '').trim().split('\n').pop()); } catch (_) {}
+    if (!ui.length) {
+      check('配置页探针跑起来了', false,
+        (probe.stderr || probe.stdout || '无输出').slice(-300));
+    }
+    for (const c of ui) check(`配置页 · ${c.name}`, c.ok, c.ok ? '' : c.detail);
   }
 
   console.log('\n10. 关停与残留锁接管');

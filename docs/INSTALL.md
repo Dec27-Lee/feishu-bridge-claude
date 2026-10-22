@@ -55,9 +55,9 @@ node setup/feishu/scopes.js
 
 | 权限 | 干什么用 |
 | --- | --- |
-| `im:message.group_msg` | 收群里的消息——**收不到消息基本都是缺这个** |
+| `im:message.group_msg` | 收群里的消息——**收不到消息基本都是缺这个**。这是「获取群组中所有消息」高级权限，后台要单独申请开通；只给到「@机器人」那一档时，话题里不 @ 就没反应 |
 | `im:message.p2p_msg:readonly` | 收单聊消息（事件订阅的 schema 要求） |
-| `im:message:readonly` | 卡片回调取 `card_content`、查话题根、下载图片 |
+| `im:message:readonly` | 卡片回调取 `card_content`、查话题根（图片下载走 `im:resource`） |
 | `im:message:send_as_bot` | 以机器人身份发卡片、回复、建话题 |
 | `im:message:update` | 作答后把卡片改成结果态 |
 | `im:message.pins:write_only` | 新窗口的话题置顶 |
@@ -106,9 +106,12 @@ cp config.example.json config.json
 | --- | --- |
 | `chatId` | 群设置里的群 ID，形如 `oc_xxxxxxxx` |
 | `larkCli` | lark-cli 的绝对路径；装在 PATH 里就留 `"lark-cli"` |
-| `launchAliases` | 可选。`{"个人": "/Users/you/workspace"}` 这样给常用目录起名 |
+| `launchAliases` | 可选。`{"个人": "/Users/you/workspace"}` 这样给常用目录起名，发 `#个人` 直接进；别名会显示在「选择工作区」卡片的按钮上 |
 
 **验证**：`node kernel/config.js --check` 输出「配置校验通过」。
+
+> 不想手写 JSON 的话用 `node setup/config-ui.js`：浏览器里按分组填，字段名、
+> 默认值、取值范围都从 schema 生成，保存前会先给你看改动。
 
 > 配置结构由 schema 定义（`kernel/config.js` 的 `TOP_SCHEMA` 与各插件 `plugin.json`
 > 的 `config`），默认值、取值范围、说明都在那里。`config.example.json` 必须由

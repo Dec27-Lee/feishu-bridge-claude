@@ -10,8 +10,9 @@
       "default": true,
       "title": "新话题自动置顶",
       "description": "每开一个窗口把它的话题置顶，话题多了好找。群里限制了置顶权限就关掉。",
-      "ui:group": "开窗",
-      "ui:widget": "switch"
+      "ui:group": "工作目录",
+      "ui:widget": "switch",
+      "ui:page": "feishu"
     },
     "notifyOpenId": {
       "type": "string",
@@ -19,7 +20,8 @@
       "title": "需要你介入时 @ 谁",
       "description": "你的 open_id（ou_ 开头）。留空则不 @。",
       "ui:group": "提醒",
-      "ui:widget": "text"
+      "ui:widget": "text",
+      "ui:page": "feishu"
     },
     "pickMax": {
       "type": "integer",
@@ -28,8 +30,9 @@
       "maximum": 50,
       "title": "工作区候选最多列几个",
       "description": "飞书卡片有长度上限，列太多会被拒。超出的可以用 #目录名 直接指定。",
-      "ui:group": "开窗",
-      "ui:widget": "number"
+      "ui:group": "工作目录",
+      "ui:widget": "number",
+      "ui:page": "feishu"
     },
     "resumeMax": {
       "type": "integer",
@@ -39,7 +42,8 @@
       "title": "可恢复会话最多列几个",
       "description": "近 5 天内、没在运行的会话，按最近活跃排序。",
       "ui:group": "恢复会话",
-      "ui:widget": "number"
+      "ui:widget": "number",
+      "ui:page": "feishu"
     },
     "launchTimeoutSeconds": {
       "type": "integer",
@@ -48,8 +52,9 @@
       "maximum": 180,
       "title": "等窗口启动多久算超时",
       "description": "窗口起来后会自己注册，超过这个时间没注册就回一张红色超时卡片。",
-      "ui:group": "开窗",
-      "ui:widget": "number"
+      "ui:group": "工作目录",
+      "ui:widget": "number",
+      "ui:page": "feishu"
     }
   },
   "hooks": {

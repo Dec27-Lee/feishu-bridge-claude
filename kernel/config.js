@@ -144,6 +144,7 @@ function toJsonSchema(schema, meta) {
     const ui = {};
     if (spec['ui:widget']) ui.widget = spec['ui:widget'];
     if (spec['ui:group']) ui.group = spec['ui:group'];
+    if (spec['ui:page']) ui.page = spec['ui:page'];
     if (spec.secret) ui.secret = true;
     if (spec.values) {
       ui.options = spec.values.map((x) => (typeof x === 'object'
@@ -189,6 +190,22 @@ function resolve(pluginsById, userConfig) {
   };
 }
 
+// 顶层配置分成哪几页。**这是唯一真相**：配置页左侧导航的「通用配置 / 飞书消息」
+// 就是这两项，每项下面有哪些字段由各字段自己的 `ui:page` 决定。
+// 加一个页面 = 在这里加一项 + 给相关字段写 `ui:page`，前端不用改。
+const PAGES = [
+  {
+    id: 'general',
+    title: '通用配置',
+    description: '这个工具自身的行为：开窗候选目录、数据与日志的清理规则、运行状态。',
+  },
+  {
+    id: 'feishu',
+    title: '飞书消息',
+    description: '和飞书有关的一切：群与 lark-cli 路径、消息分段、卡片上的用量显示。',
+  },
+];
+
 // 顶层（非插件）配置。同样是「schema 即真相」。
 const TOP_SCHEMA = {
   // 给人看的说明行，代码不读；声明出来是为了让校验不把它当未知键
@@ -206,6 +223,7 @@ const TOP_SCHEMA = {
     title: '飞书群 ID',
     description: '机器人所在的话题群。群设置里能看到，形如 oc_xxxxxxxx。',
     pattern: '^$|^oc_[A-Za-z0-9]+$',
+    'ui:page': 'feishu',
     'ui:group': '飞书',
     'ui:widget': 'text',
   },
@@ -214,6 +232,7 @@ const TOP_SCHEMA = {
     default: 'lark-cli',
     title: 'lark-cli 路径',
     description: '装在 PATH 里就留 lark-cli；否则写绝对路径。',
+    'ui:page': 'feishu',
     'ui:group': '飞书',
     'ui:widget': 'text',
   },
@@ -221,15 +240,19 @@ const TOP_SCHEMA = {
     type: 'object',
     default: {},
     title: '目录别名',
-    description: '给常用目录起短名，发 #个人 就能直接进。可留空。',
-    'ui:group': '开窗',
+    description: '给常用目录起短名，发 #个人 就能直接进；别名也会显示在「选择工作区」卡片的按钮上。可留空。',
+    'ui:page': 'feishu',
+    'ui:group': '工作目录',
+    'ui:widget': 'json',
   },
   launchWorkspaces: {
     type: 'array',
     default: [],
     title: '额外候选目录',
     description: '通常不需要填——桥接会自动发现用过的目录。',
-    'ui:group': '开窗',
+    'ui:page': 'feishu',
+    'ui:group': '工作目录',
+    'ui:widget': 'json',
   },
   contextWindowSize: {
     type: 'integer',
@@ -237,6 +260,7 @@ const TOP_SCHEMA = {
     minimum: 1000,
     title: '上下文窗口上限',
     description: '通知卡片上用量百分比的分母。默认读 HUD 缓存里的真实值（推荐，能跟着模型换代走）；只有缓存取不到时才用这里的值。',
+    'ui:page': 'feishu',
     'ui:group': '显示',
     'ui:widget': 'number',
   },
@@ -247,23 +271,32 @@ const TOP_SCHEMA = {
     maximum: 30000,
     title: '长回复分段字数',
     description: '超过这个长度的回复会拆成多条消息。',
+    'ui:page': 'feishu',
     'ui:group': '显示',
     'ui:widget': 'number',
   },
   sessionTtlHours: {
     type: 'integer', default: 48, minimum: 1, title: '会话记录保留（小时）',
+    description: '窗口关掉后，它在飞书这头的记录留多久。超时自动清掉。',
+    'ui:page': 'general',
     'ui:group': '清理', 'ui:widget': 'number',
   },
   mappingTtlDays: {
     type: 'integer', default: 14, minimum: 1, title: '消息映射保留（天）',
+    description: '「这条飞书消息对应哪个窗口」的记录保留多久。删早了，旧话题里的回复就找不到窗口。',
+    'ui:page': 'general',
     'ui:group': '清理', 'ui:widget': 'number',
   },
   imageTtlDays: {
     type: 'integer', default: 7, minimum: 1, title: '图片保留（天）',
+    description: '飞书发来的图片下载到本地后保留多久。按日期目录整目录删，每小时检查一次。',
+    'ui:page': 'general',
     'ui:group': '清理', 'ui:widget': 'number',
   },
   maxLogBytes: {
     type: 'integer', default: 5242880, minimum: 65536, title: '单个日志上限（字节）',
+    description: '某个日志超过这个大小就只留尾部一半。默认 5MB。',
+    'ui:page': 'general',
     'ui:group': '清理', 'ui:widget': 'number',
   },
   // 插件各自的参数放这里，键是插件 id。每个插件的合法键由它自己的 schema 定义，
@@ -293,7 +326,9 @@ function resolveAll(pluginsById, userConfig) {
 // 导出完整 schema（顶层 + 各插件），供前端渲染配置页。
 function dumpSchema(pluginsById) {
   return {
-    version: 1,
+    version: 2,
+    // 前端靠这张表渲染左侧导航的分组。页面里不写死任何标题或顺序。
+    pages: PAGES,
     top: toJsonSchema(TOP_SCHEMA, { title: '基础配置' }),
     plugins: Object.fromEntries(Object.entries(pluginsById || {}).map(([id, m]) => [id, {
       name: m.name || id,
@@ -305,7 +340,7 @@ function dumpSchema(pluginsById) {
   };
 }
 
-module.exports = { TOP_SCHEMA, validate, defaults, toJsonSchema, resolve, resolveAll, dumpSchema };
+module.exports = { TOP_SCHEMA, PAGES, validate, defaults, toJsonSchema, resolve, resolveAll, dumpSchema };
 
 // ---- CLI：把 schema 吐出来给前端/编辑器用 ----
 //

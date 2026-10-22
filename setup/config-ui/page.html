@@ -1,0 +1,1026 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Feishu Bridge Claude 配置</title>
+<style>
+  /* 单文件、无外链、无构建：这个页面的使用者是 AI 装出来的本机工具，
+     引 CDN 只会在离线/内网环境里把页面变成一个空白页。 */
+  :root {
+    --page: #ffffff;
+    --side: #fbfbfa;
+    --fg: #1b1b19;
+    --muted: #8a8a85;
+    --line: #ececeb;
+    --line-strong: #e2e2e0;
+    --hover: #f4f4f2;
+    --active: #ececea;
+    --field: #ffffff;
+    --accent: #f26522;
+    --accent-soft: rgba(242, 101, 34, .1);
+    --err: #c0392b;
+    --warn: #96690b;
+    --code: #f7f7f5;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --page: #17171a;
+      --side: #131316;
+      --fg: #e9e9e5;
+      --muted: #8e8e88;
+      --line: #26262b;
+      --line-strong: #2e2e34;
+      --hover: #202026;
+      --active: #2a2a31;
+      --field: #1d1d22;
+      --accent: #f4793a;
+      --accent-soft: rgba(244, 121, 58, .16);
+      --err: #e8796b;
+      --warn: #dcae55;
+      --code: #1c1c21;
+    }
+  }
+  /* 手动选深色时，不管系统是什么都按深色来 */
+  :root[data-theme="dark"] {
+    --page: #17171a;
+    --side: #131316;
+    --fg: #e9e9e5;
+    --muted: #8e8e88;
+    --line: #26262b;
+    --line-strong: #2e2e34;
+    --hover: #202026;
+    --active: #2a2a31;
+    --field: #1d1d22;
+    --accent: #f4793a;
+    --accent-soft: rgba(244, 121, 58, .16);
+    --err: #e8796b;
+    --warn: #dcae55;
+    --code: #1c1c21;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; background: var(--page); color: var(--fg);
+    font: 14px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+          "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  button, input, select, textarea { font: inherit; color: inherit; }
+
+  /* ---- 骨架：左栏 + 右面板 ---- */
+  .shell { display: flex; height: 100vh; overflow: hidden; }
+
+  aside {
+    width: 244px; flex: 0 0 244px; background: var(--side);
+    border-right: 1px solid var(--line);
+    display: flex; flex-direction: column; padding: 14px 0 10px;
+  }
+  .brand {
+    display: flex; align-items: center; gap: 9px;
+    padding: 6px 18px 18px; font-size: 15px; font-weight: 650; letter-spacing: .01em;
+  }
+  .brand .dot {
+    width: 18px; height: 18px; border-radius: 50%;
+    background: conic-gradient(from 210deg, #f26522, #f7a03c, #f2c14e, #e8654e, #f26522);
+    flex: 0 0 auto;
+  }
+  .sectlabel {
+    font-size: 11.5px; color: var(--muted); padding: 2px 20px 6px;
+  }
+  nav { display: flex; flex-direction: column; gap: 2px; padding: 0 10px; }
+  nav button {
+    display: flex; align-items: center; gap: 9px; width: 100%;
+    padding: 8px 10px; border: 0; border-radius: 8px; background: none;
+    color: var(--fg); text-align: left; cursor: pointer; font-size: 13.5px;
+  }
+  nav button:hover { background: var(--hover); }
+  nav button[aria-current="true"] { background: var(--active); font-weight: 550; }
+  nav button .ico {
+    width: 16px; text-align: center; color: var(--muted); font-size: 14px; line-height: 1;
+  }
+  nav button[aria-current="true"] .ico { color: var(--fg); }
+  nav button .nm { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  nav button .cnt { font-size: 11px; color: var(--muted); }
+  /* 导航分组标签（设置 / 插件）。不写死页名，页名来自后端 schema。 */
+  .navsect {
+    font-size: 11.5px; letter-spacing: .06em; color: var(--muted);
+    padding: 14px 20px 5px; text-transform: none;
+  }
+  .sidefoot {
+    margin-top: auto; padding: 12px 18px 2px; font-size: 11.5px; color: var(--muted);
+    word-break: break-all; line-height: 1.5;
+  }
+
+  .panel { flex: 1 1 auto; display: flex; flex-direction: column; min-width: 0; }
+  .topbar {
+    display: flex; align-items: center; gap: 10px; min-width: 0;
+    padding: 16px 32px 12px; border-bottom: 1px solid transparent;
+  }
+  .topbar h1 { font-size: 17px; font-weight: 650; margin: 0; letter-spacing: .01em; flex: 0 0 auto; }
+  /* 副标题里是配置文件的绝对路径，没有断行机会。不给省略号的话它会把整个
+     顶栏撑得比窗口还宽，窄屏上正文跟着横向溢出。 */
+  .topbar .sub {
+    font-size: 12.5px; color: var(--muted); margin-left: 2px;
+    min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .topbar .spacer { flex: 1 1 auto; }
+
+  .scroll { flex: 1 1 auto; overflow: auto; padding: 4px 32px 28px; }
+  .inner { max-width: 880px; }
+
+  /* ---- 分组：标题在卡片外，卡片是一组行 ---- */
+  .group { margin: 22px 0 0; }
+  .group > h2 {
+    font-size: 16px; font-weight: 600; margin: 0 0 10px; letter-spacing: .01em;
+  }
+  .card {
+    background: var(--page); border: 1px solid var(--line-strong);
+    border-radius: 12px;
+  }
+  .row {
+    display: flex; align-items: center; gap: 24px;
+    padding: 14px 18px; min-height: 56px;
+  }
+  .row + .row { border-top: 1px solid var(--line); }
+  .row.stacked { flex-direction: column; align-items: stretch; gap: 8px; }
+  .rowlabel { display: flex; align-items: center; gap: 6px; flex: 1 1 auto; min-width: 0; }
+  .rowlabel .t { font-size: 13.5px; }
+  .row .q {
+    flex: 0 0 auto; width: 14px; height: 14px; border-radius: 50%;
+    border: 1px solid var(--line-strong); color: var(--muted);
+    font-size: 10px; line-height: 12px; text-align: center;
+    position: relative; cursor: help; user-select: none;
+  }
+  .row .q::after {
+    content: attr(data-tip);
+    position: absolute; left: 50%; top: calc(100% + 7px); transform: translateX(-50%);
+    width: max-content; max-width: 300px; white-space: normal;
+    background: var(--fg); color: var(--page);
+    padding: 7px 10px; border-radius: 7px; font-size: 12px; line-height: 1.5;
+    text-align: left; opacity: 0; pointer-events: none; transition: opacity .12s;
+    z-index: 20; box-shadow: 0 4px 14px rgba(0, 0, 0, .16);
+  }
+  .row .q:hover::after, .row .q:focus-visible::after { opacity: 1; }
+  .row .key {
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+    font-size: 11px; color: var(--muted);
+  }
+  .rowctl { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+  .row.stacked .rowctl { width: 100%; }
+  /* 多行控件那一行：「恢复默认」贴在标题右侧，不跟着输入框垂直居中 */
+  .row.stacked .rowctltop { display: flex; align-items: center; gap: 8px; }
+
+  /* ---- 控件 ---- */
+  input[type=text], input[type=password], input[type=number], select, textarea {
+    background: var(--field); border: 1px solid var(--line-strong);
+    border-radius: 8px; padding: 6px 10px; font-size: 13.5px;
+    outline: none; transition: border-color .12s, box-shadow .12s;
+  }
+  input[type=text], input[type=password] { width: 380px; max-width: 100%; }
+  input[type=number] { width: 120px; text-align: left; }
+  select { width: 190px; appearance: none; padding-right: 26px; cursor: pointer;
+    background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+                      linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+    background-position: calc(100% - 13px) 52%, calc(100% - 8px) 52%;
+    background-size: 5px 5px, 5px 5px; background-repeat: no-repeat;
+  }
+  textarea {
+    width: 100%; min-height: 76px; resize: vertical;
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+    font-size: 12.5px; line-height: 1.65;
+  }
+  input:focus, select:focus, textarea:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+  }
+  input:disabled, select:disabled, textarea:disabled { opacity: .55; cursor: not-allowed; }
+
+  /* 开关：44×24 胶囊，选中的是主色 */
+  .sw { position: relative; width: 44px; height: 24px; flex: 0 0 auto; }
+  .sw input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; }
+  .sw i {
+    position: absolute; inset: 0; border-radius: 999px; background: var(--line-strong);
+    transition: background .16s; pointer-events: none;
+  }
+  .sw i::after {
+    content: ""; position: absolute; top: 2px; left: 2px; width: 20px; height: 20px;
+    border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, .22);
+    transition: transform .16s;
+  }
+  .sw input:checked + i { background: var(--accent); }
+  .sw input:checked + i::after { transform: translateX(20px); }
+  .sw input:focus-visible + i { box-shadow: 0 0 0 3px var(--accent-soft); }
+
+  /* 分段选择器（外观的 跟随系统 / 浅色 / 深色） */
+  .seg {
+    display: inline-flex; background: var(--hover); border-radius: 8px; padding: 2px; gap: 2px;
+  }
+  .seg button {
+    border: 0; background: none; color: var(--muted); cursor: pointer;
+    padding: 5px 12px; border-radius: 6px; font-size: 13px; white-space: nowrap;
+  }
+  .seg button:hover { color: var(--fg); }
+  .seg button[aria-pressed="true"] {
+    background: var(--page); color: var(--fg); font-weight: 550;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, .1);
+  }
+
+  .reset {
+    border: 0; background: none; color: var(--muted); cursor: pointer;
+    font-size: 11.5px; padding: 3px 5px; border-radius: 6px; white-space: nowrap;
+    width: 62px; text-align: right;
+  }
+  .reset:hover { background: var(--hover); color: var(--fg); }
+  /* 隐藏时保留占位：否则同一列里有的行有按钮、有的没有，输入框会左右错开 */
+  .reset[hidden] { display: inline-block; visibility: hidden; }
+
+  /* ---- 顶部提示条 ---- */
+  .banner {
+    margin: 0 0 2px; padding: 9px 12px; border-radius: 9px; font-size: 12.5px;
+    line-height: 1.55; background: var(--hover); color: var(--muted);
+    border: 1px solid var(--line);
+  }
+  .banner.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 32%, transparent);
+    background: color-mix(in srgb, var(--warn) 8%, transparent); }
+  .banner.err { color: var(--err); border-color: color-mix(in srgb, var(--err) 32%, transparent);
+    background: color-mix(in srgb, var(--err) 8%, transparent); }
+
+  /* ---- 底部操作条 ---- */
+  .actions {
+    display: flex; align-items: center; gap: 10px;
+    padding: 12px 32px; border-top: 1px solid var(--line); background: var(--page);
+  }
+  #msg { margin-right: auto; font-size: 12.5px; color: var(--muted); }
+  #msg.err { color: var(--err); }
+  #msg.ok { color: var(--accent); }
+  button.btn {
+    border: 1px solid var(--line-strong); background: var(--page); color: var(--fg);
+    padding: 7px 15px; border-radius: 8px; cursor: pointer; font-size: 13.5px;
+  }
+  button.btn:hover { background: var(--hover); }
+  button.btn.primary {
+    background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 550;
+  }
+  button.btn.primary:hover { filter: brightness(1.06); }
+  button.btn:disabled { opacity: .5; cursor: default; }
+
+  /* ---- 预览弹窗 ---- */
+  dialog {
+    border: 1px solid var(--line-strong); border-radius: 14px; background: var(--page);
+    color: var(--fg); padding: 0; width: min(700px, 92vw); max-height: 84vh;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, .24);
+  }
+  dialog::backdrop { background: rgba(20, 20, 20, .42); }
+  .dlghead { padding: 16px 20px 12px; font-size: 15px; font-weight: 650; }
+  .dlgbody { padding: 0 20px 16px; overflow: auto; max-height: 62vh; }
+  .dlgfoot {
+    padding: 12px 20px; border-top: 1px solid var(--line);
+    display: flex; gap: 10px; justify-content: flex-end;
+  }
+  .charset { margin: 0 0 10px; padding-left: 18px; font-size: 12.5px; line-height: 1.7; }
+  .charset.errs { color: var(--err); }
+  .charset.warns { color: var(--warn); }
+  table.diff {
+    border-collapse: collapse; width: 100%;
+    font-size: 12.5px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  }
+  table.diff th {
+    text-align: left; font-weight: 500; color: var(--muted);
+    padding: 6px 8px; border-bottom: 1px solid var(--line);
+  }
+  table.diff td { padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  table.diff .old { color: var(--err); }
+  table.diff .new { color: var(--accent); }
+  pre.content {
+    background: var(--code); border: 1px solid var(--line); border-radius: 9px;
+    padding: 10px 12px; overflow: auto; max-height: 26vh; margin: 10px 0 0;
+    font-size: 12.5px; line-height: 1.6;
+  }
+  .note { font-size: 12px; color: var(--muted); margin-top: 10px; }
+  .loading { padding: 60px 0; text-align: center; color: var(--muted); }
+
+  /* 窄屏：侧栏收成顶部横排，仍然是同一份 DOM */
+  @media (max-width: 720px) {
+    .shell { flex-direction: column; height: auto; overflow: visible; }
+    aside { width: auto; flex: 0 0 auto; border-right: 0; border-bottom: 1px solid var(--line); }
+    .brand { padding-bottom: 10px; }
+    nav { flex-direction: row; overflow-x: auto; padding-bottom: 8px; scrollbar-width: none; }
+    nav::-webkit-scrollbar { display: none; }
+    nav button { width: auto; white-space: nowrap; }
+    .sidefoot { display: none; }
+    .panel { overflow: visible; }
+    .scroll { padding: 4px 16px 20px; overflow: visible; }
+    .topbar { flex-wrap: wrap; padding-left: 16px; padding-right: 16px; }
+    .topbar .sub { flex: 1 1 100%; white-space: normal; }
+    .actions { padding-left: 16px; padding-right: 16px; }
+    .row { flex-direction: column; align-items: stretch; gap: 8px; }
+    .rowctl { width: 100%; }
+    input[type=text], input[type=password], select { width: 100%; }
+    .banner { overflow-wrap: anywhere; }
+    .q::after { left: 0; transform: none; }
+  }
+  /* 极窄屏：底部操作条改成两行，否则提示文字把两个按钮挤出屏幕 */
+  @media (max-width: 480px) {
+    .actions { flex-wrap: wrap; }
+    #msg { flex: 1 1 100%; margin-right: 0; }
+  }
+</style>
+</head>
+<body>
+
+<div class="shell">
+  <aside>
+    <div class="brand"><span class="dot"></span>Feishu Bridge Claude</div>
+    <nav id="nav"></nav>
+    <div class="sidefoot" id="sidefoot"></div>
+  </aside>
+
+  <section class="panel">
+    <div class="topbar">
+      <h1 id="title">配置</h1>
+      <span class="sub" id="subtitle"></span>
+      <span class="spacer"></span>
+    </div>
+    <div class="scroll" id="page"><div class="loading">正在读取配置…</div></div>
+    <div class="actions">
+      <div id="msg"></div>
+      <button class="btn" id="btn-preview">只看改动</button>
+      <button class="btn" id="btn-save">保存</button>
+      <button class="btn primary" id="btn-save-restart">保存并重启</button>
+    </div>
+  </section>
+</div>
+
+<dialog id="dlg">
+  <div class="dlghead" id="dlg-title">改动预览</div>
+  <div class="dlgbody" id="dlg-body"></div>
+  <div class="dlgfoot">
+    <button class="btn" id="dlg-cancel">取消</button>
+    <button class="btn primary" id="dlg-apply" hidden>确认写入</button>
+  </div>
+</dialog>
+
+<script>
+'use strict';
+
+// 令牌来自启动时打印的地址（?t=xxx）。页面本身不含数据，
+// 但任何能读到 config.json 的接口都必须带它——本机也不是可信边界，
+// 任意网页都能向 127.0.0.1 发请求。
+const TOKEN = new URLSearchParams(location.search).get('t') || '';
+
+const navEl = document.getElementById('nav');
+const pageEl = document.getElementById('page');
+const titleEl = document.getElementById('title');
+const subtitleEl = document.getElementById('subtitle');
+const sidefoot = document.getElementById('sidefoot');
+const msgEl = document.getElementById('msg');
+const dlg = document.getElementById('dlg');
+const dlgTitle = document.getElementById('dlg-title');
+const dlgBody = document.getElementById('dlg-body');
+const dlgApply = document.getElementById('dlg-apply');
+
+let S = null;       // /api/state 的结果
+let active = null;  // 当前面板的 scope：'top' 或插件 id
+// 草稿：面板切换会重绘，未保存的改动必须活下来。所有编辑即时写进这里，
+// 渲染也从这里读；只有它才是「用户此刻填的内容」。
+let draft = null;
+
+// ---- 小工具：全部用 DOM API，不拼 innerHTML（标题/说明是数据，不是标记） ----
+
+function h(tag, props, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(props || {})) {
+    if (v === undefined || v === null || v === false) continue;
+    if (k === 'class') e.className = v;
+    else if (k === 'text') e.textContent = v;
+    else if (k === 'dataset') Object.assign(e.dataset, v);
+    else if (k.startsWith('on')) e.addEventListener(k.slice(2), v);
+    else e.setAttribute(k, v === true ? '' : v);
+  }
+  for (const kid of kids) {
+    if (kid === null || kid === undefined || kid === false) continue;
+    e.appendChild(typeof kid === 'string' ? document.createTextNode(kid) : kid);
+  }
+  return e;
+}
+
+function showMsg(text, kind) {
+  msgEl.textContent = text || '';
+  msgEl.className = kind || '';
+}
+
+async function api(path, body) {
+  const res = await fetch(path, {
+    method: body === undefined ? 'GET' : 'POST',
+    headers: { 'x-bridge-token': TOKEN, 'content-type': 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  let j;
+  try { j = await res.json(); } catch (_) {
+    throw new Error(`接口返回的不是 JSON（HTTP ${res.status}），看终端里的报错`);
+  }
+  return j;
+}
+
+// ---- 取值与默认值 ----
+
+const scopeValues = (scope) => {
+  const s = scope.startsWith('page:') ? 'top' : scope;
+  if (draft) return s === 'top' ? draft.top : (draft.plugins[s] || {});
+  return s === 'top' ? S.values.top : (S.values.plugins[s] || {});
+};
+const scopeDefaults = (scope) => {
+  const s = scope.startsWith('page:') ? 'top' : scope;
+  return s === 'top' ? S.defaults.top : (S.defaults.plugins[s] || {});
+};
+
+// 草稿里的「作用域」只有两种：顶层（key 为 'top'）和插件（key 为插件 id）。
+// 页面级的 scope 形如 'page:general'，写草稿时统一落到顶层。
+const draftScope = (scope) => (scope.startsWith('page:') ? 'top' : scope);
+
+// 往草稿里写。值没变就不写，避免把一个「没动过」的项标成改动。
+function setDraft(scope, key, v) {
+  const s = draftScope(scope);
+  const box = s === 'top' ? draft.top : (draft.plugins[s] = draft.plugins[s] || {});
+  if (same(box[key], v)) return;
+  box[key] = v;
+}
+
+function widgetOf(spec) {
+  const ui = spec['x-ui'] || {};
+  if (ui.widget) return ui.widget;
+  if (spec.type === 'boolean') return 'switch';
+  if (spec.type === 'integer' || spec.type === 'number') return 'number';
+  if (spec.enum || ui.options) return 'select';
+  if (spec.type === 'object' || spec.type === 'array') return 'json';
+  if (ui.secret) return 'password';
+  return 'text';
+}
+
+function fmt(v) {
+  if (typeof v === 'string') return v === '' ? '空' : JSON.stringify(v);
+  if (v && typeof v === 'object') {
+    const s = JSON.stringify(v);
+    return s.length > 48 ? s.slice(0, 48) + '…' : s;
+  }
+  return String(v);
+}
+
+function same(a, b) {
+  if (a === b) return true;
+  if (typeof a !== typeof b || a === null || b === null || typeof a !== 'object') return false;
+  try { return JSON.stringify(a) === JSON.stringify(b); } catch (_) { return false; }
+}
+
+// 按 x-ui.group 分组；组内保持 schema 的声明顺序（顺序是维护者刻意排的，不排序）
+function grouped(properties) {
+  const map = new Map();
+  for (const [key, spec] of Object.entries(properties || {})) {
+    if (key.startsWith('_')) continue;        // 给人看的备注行，不渲染
+    const g = (spec['x-ui'] || {}).group || '其他';
+    if (!map.has(g)) map.set(g, []);
+    map.get(g).push([key, spec]);
+  }
+  return map;
+}
+
+function markDirty() { showMsg('有未保存的改动'); }
+
+// ---- 一行 = 标题 + 控件 ----
+
+function buildRow(scope, key, spec) {
+  const kinds = widgetOf(spec);
+  const cur = scopeValues(scope)[key];
+  const def = scopeDefaults(scope)[key];
+
+  const ctl = h('div', { class: 'rowctl' });
+  let input;
+
+  // 当前值是否与默认值相同，决定要不要露出「恢复默认」。
+  // 必须随输入重算：只在渲染时算一次的话，用户把值改掉后反而看不到这个按钮了。
+  const currentValue = () => {
+    if (input.dataset.kind === 'boolean') return input.checked;
+    if (input.dataset.kind === 'number') return input.value === '' ? undefined : Number(input.value);
+    if (input.dataset.kind === 'json') {
+      try { return JSON.parse(input.value); } catch (_) { return input.value; }
+    }
+    return input.value;
+  };
+
+  if (kinds === 'switch') {
+    input = h('input', { type: 'checkbox' });
+    input.checked = cur === true;
+    input.dataset.kind = 'boolean';
+    ctl.appendChild(h('label', { class: 'sw' }, input, h('i')));
+  } else if (kinds === 'json') {
+    input = h('textarea', { spellcheck: 'false' });
+    const text = JSON.stringify(cur === undefined ? def : cur, null, 2);
+    input.value = text;
+    input.rows = Math.min(16, Math.max(3, text.split('\n').length + 1));
+    input.dataset.kind = 'json';
+    ctl.appendChild(input);
+  } else if (kinds === 'select') {
+    input = h('select');
+    input.dataset.kind = spec.type === 'integer' || spec.type === 'number' ? 'number' : 'text';
+    for (const o of (spec['x-ui'] || {}).options || []) {
+      const opt = h('option', { value: String(o.value), text: o.label });
+      if (same(o.value, cur)) opt.selected = true;
+      input.appendChild(opt);
+    }
+    ctl.appendChild(input);
+  } else {
+    const type = kinds === 'password' ? 'password' : (kinds === 'number' ? 'number' : 'text');
+    input = h('input', { type });
+    input.dataset.kind = kinds === 'number' ? 'number' : 'text';
+    if (kinds === 'number') {
+      input.step = spec.type === 'integer' ? '1' : 'any';
+      if (spec.minimum !== undefined) input.min = spec.minimum;
+      if (spec.maximum !== undefined) input.max = spec.maximum;
+    }
+    input.value = cur === undefined ? '' : String(cur);
+    // 路径类的值经常比输入框长，悬停给出全文，省得点进去左右拖
+    if (input.value) input.title = input.value;
+    input.addEventListener('input', () => { input.title = input.value; });
+    ctl.appendChild(input);
+  }
+
+  input.dataset.scope = scope;
+  input.dataset.key = key;
+
+  // 「恢复默认」按钮的显隐跟随当前值，先声明出来，下面的 commit 要用
+  let syncReset = () => {};
+
+  // 每次输入都写进草稿：面板切换会重绘，改动不能丢。
+  // 草稿是「用户此刻填的内容」，保存与预览都从它取。
+  const commit = () => {
+    const v = currentValue();
+    if (v === undefined && input.dataset.kind === 'number') return;   // 留空 = 不改
+    setDraft(scope, key, v);
+    markDirty();
+    syncReset();
+  };
+  input.addEventListener('input', commit);
+  input.addEventListener('change', commit);
+
+  // 说明折叠进 ? 气泡里，行本身保持干净；默认值也放进去
+  // 按钮始终存在（没有默认值时永远隐藏）：同一列里有的行有按钮、有的没有，
+  // 输入框会左右错开，看着像没对齐。
+  const reset = h('button', {
+    class: 'reset', type: 'button', text: '恢复默认',
+    onclick: () => {
+      if (def === undefined) return;
+      if (input.dataset.kind === 'boolean') input.checked = def === true;
+      else if (input.dataset.kind === 'json') input.value = JSON.stringify(def, null, 2);
+      else input.value = def === undefined ? '' : String(def);
+      setDraft(scope, key, def);
+      markDirty();
+      syncReset();
+    },
+  });
+  if (def !== undefined) {
+    syncReset = () => { reset.hidden = same(currentValue(), def); };
+  }
+
+  const tips = [spec.description || '', def !== undefined ? `默认 ${fmt(def)}` : ''].filter(Boolean);
+  // 顺序：中文名 → 键名 → ? 气泡。键名放中间，扫一眼就能对上 config.json，
+  // 但不抢中文名字的注意力。
+  const label = h('div', { class: 'rowlabel' },
+    h('span', { class: 't', text: spec.title || key }),
+    h('span', { class: 'key', text: key }),
+    tips.length ? h('span', {
+      class: 'q', tabindex: '0', role: 'note', text: '?',
+      'data-tip': tips.join('　'),
+    }) : null);
+
+  const stacked = kinds === 'json';
+  // 多行控件那一行很高，按钮跟着输入框居中会飘在中间；贴到标题行右侧更顺眼
+  if (stacked) label.appendChild(reset);
+  else ctl.appendChild(reset);
+  if (def === undefined) reset.hidden = true;
+  else syncReset();
+
+  return h('div', { class: stacked ? 'row stacked' : 'row' }, label, ctl);
+}
+
+// 「通用配置 / 飞书消息」这两页的 id 与标题来自 schema.pages（kernel/config.js 的
+// PAGES），页面里不写死。每个字段属于哪一页由它自己的 `ui:page` 决定。
+function pageMeta(id) {
+  return (S.schema.pages || []).find((p) => p.id === id) || null;
+}
+
+// 某一页上有哪些字段。**顶层配置和插件配置都会往这里汇**：
+// 置顶、@谁、候选几个这些挂在核心插件名下，但都是飞书那一侧的行为，
+// 就该出现在「飞书消息」里，而不是让人为了改一个 @人 去点插件页。
+// 返回 [{ scope, key, spec }]，scope 为 'top' 或插件 id。
+function fieldsOfPage(pageId) {
+  const out = [];
+  for (const [k, spec] of Object.entries(S.schema.top.properties || {})) {
+    if (k.startsWith('_') || k === 'plugins') continue;
+    const pg = (spec['x-ui'] || {}).page;
+    // 没标页的字段归到第一页：新增配置项时忘写 ui:page，也不能让它凭空消失
+    const want = pg || firstPageId();
+    if (want === pageId) out.push({ scope: 'top', key: k, spec });
+  }
+  for (const [id, p] of Object.entries(S.schema.plugins || {})) {
+    for (const [k, spec] of Object.entries((p.schema || {}).properties || {})) {
+      if (k.startsWith('_')) continue;
+      if ((spec['x-ui'] || {}).page === pageId) out.push({ scope: id, key: k, spec });
+    }
+  }
+  return out;
+}
+
+function firstPageId() {
+  return (S.schema.pages && S.schema.pages[0] && S.schema.pages[0].id) || 'general';
+}
+
+// 插件自己那页还剩哪些字段。被 ui:page 领走的字段不再在插件页里重复出现。
+function propsOfPlugin(id) {
+  const all = ((S.schema.plugins[id] || {}).schema || {}).properties || {};
+  const out = {};
+  for (const [k, spec] of Object.entries(all)) {
+    if (k.startsWith('_')) continue;
+    if ((spec['x-ui'] || {}).page) continue;
+    out[k] = spec;
+  }
+  return out;
+}
+
+// 把一页的字段按分组名归堆。
+//
+// **同名分组直接合并成一张卡**：用户不关心某一项在 config.json 里属于顶层还是某个
+// 插件，他只关心「改工作目录的地方在哪」。所以卡片标题就是分组名本身，
+// 不再附加「（核心路由）」这类来源标注——那是实现细节，写出来只是噪音。
+function groupedFields(fields) {
+  const map = new Map();
+  for (const f of fields) {
+    const g = (f.spec['x-ui'] || {}).group || '其他';
+    if (!map.has(g)) map.set(g, { label: g, rows: [] });
+    map.get(g).rows.push(f);
+  }
+  return map;
+}
+
+function renderPanel(scope) {
+  const isTopPage = scope.startsWith('page:');
+  const pageId = isTopPage ? scope.slice(5) : null;
+  const meta = isTopPage ? null : (S.schema.plugins[scope] || {});
+
+  if (isTopPage) {
+    const pm = pageMeta(pageId) || { title: pageId, description: '' };
+    titleEl.textContent = pm.title;
+    subtitleEl.textContent = pm.description || S.configFile || '';
+  } else {
+    titleEl.textContent = meta.name || scope;
+    subtitleEl.textContent = [meta.description || '', meta.core ? '内置插件' : '']
+      .filter(Boolean).join('　·　');
+  }
+
+  pageEl.textContent = '';
+  const inner = h('div', { class: 'inner' });
+
+  const problems = [];
+  if (S.parseError) problems.push(`config.json 不是合法 JSON：${S.parseError}。先手工修好，页面才允许保存。`);
+  for (const e of S.errors || []) problems.push(e);
+
+  if (problems.length) {
+    inner.appendChild(h('div', { class: 'banner err', text: problems.join('　') }));
+  } else {
+    // 只有「保存」和「保存并重启」两个动作的区别，不再让人去终端敲命令。
+    // 重启本身会先校验配置：写坏了就拒绝重启，不会把桥接弄没。
+    inner.appendChild(h('div', {
+      class: 'banner',
+      text: '配置在桥接启动时读取一次。要让改动生效，点底部的「保存并重启」。',
+    }));
+  }
+
+  if (isTopPage) {
+    const groups = groupedFields(fieldsOfPage(pageId));
+    if (!groups.size) inner.appendChild(h('div', { class: 'banner', text: '这一页还没有可配置项。' }));
+    for (const [, g] of groups) {
+      const card = h('div', { class: 'card' },
+        ...g.rows.map((f) => buildRow(f.scope, f.key, f.spec)));
+      inner.appendChild(h('section', { class: 'group' }, h('h2', { text: g.label }), card));
+    }
+    // 「通用配置」页末尾挂两块东西：界面外观 + 只读的运行状态。
+    if (pageId === firstPageId()) {
+      inner.appendChild(buildAppearanceCard());
+      if (S.system) inner.appendChild(buildStatusCard(S.system));
+    }
+  } else {
+    const groups = grouped(propsOfPlugin(scope));
+    if (!groups.size) {
+      inner.appendChild(h('div', { class: 'banner', text: '这个插件没有自己的可配置项（它的配置在「飞书消息」页里）。' }));
+    }
+    for (const [g, list] of groups) {
+      const card = h('div', { class: 'card' }, ...list.map(([k, s]) => buildRow(scope, k, s)));
+      inner.appendChild(h('section', { class: 'group' }, h('h2', { text: g }), card));
+    }
+  }
+
+  pageEl.appendChild(inner);
+  pageEl.scrollTop = 0;
+
+  document.getElementById('btn-save').disabled = !S.writable;
+  document.getElementById('btn-save-restart').disabled = !S.writable;
+  document.getElementById('btn-preview').disabled = !S.writable;
+}
+
+// 外观：明暗。**存在浏览器本地**（localStorage），不写进 config.json。
+// 理由：它是「这台机器上这个浏览器」的偏好，跟桥接怎么跑无关；
+// 写进配置文件反而会让换台电脑看同一份配置的人被莫名其妙地变成深色。
+const THEME_KEY = 'fbc-theme';
+const THEMES = [
+  ['auto', '跟随系统'],
+  ['light', '浅色'],
+  ['dark', '深色'],
+];
+
+function currentTheme() {
+  try { return localStorage.getItem(THEME_KEY) || 'auto'; } catch (_) { return 'auto'; }
+}
+
+function applyTheme(v) {
+  // auto = 去掉 data-theme，让 @media (prefers-color-scheme) 生效
+  if (v === 'light' || v === 'dark') document.documentElement.dataset.theme = v;
+  else delete document.documentElement.dataset.theme;
+  try { localStorage.setItem(THEME_KEY, v); } catch (_) {}
+}
+
+function buildAppearanceCard() {
+  const cur = currentTheme();
+  const seg = h('div', { class: 'seg', role: 'group', 'aria-label': '明暗' });
+  for (const [v, label] of THEMES) {
+    const b = h('button', {
+      type: 'button', 'aria-pressed': cur === v ? 'true' : 'false', text: label,
+      onclick: () => {
+        applyTheme(v);
+        for (const x of seg.querySelectorAll('button')) x.setAttribute('aria-pressed', 'false');
+        b.setAttribute('aria-pressed', 'true');
+      },
+    });
+    seg.appendChild(b);
+  }
+
+  return h('section', { class: 'group' },
+    h('h2', { text: '外观' }),
+    h('div', { class: 'card' },
+      h('div', { class: 'row' },
+        h('div', { class: 'rowlabel' },
+          h('span', { class: 't', text: '明暗' }),
+          h('span', {
+            class: 'q', tabindex: '0', role: 'note', text: '?',
+            'data-tip': '只影响这个浏览器，存在本地，不会写进 config.json。',
+          })),
+        h('div', { class: 'rowctl' }, seg))));
+}
+
+// 运行状态：只读，不参与保存。安装/卸载动作仍然走 setup/install.js——
+// 配置页不该变成第二个改系统配置的入口。
+function buildStatusCard(sys) {
+  const row = (label, value, hint) => h('div', { class: 'row' },
+    h('div', { class: 'rowlabel' },
+      h('span', { class: 't', text: label }),
+      hint ? h('span', { class: 'q', tabindex: '0', role: 'note', text: '?', 'data-tip': hint }) : null),
+    h('div', { class: 'rowctl' }, h('span', { class: 'stat', text: value })));
+
+  const auto = sys.autostart || {};
+  const autoText = !auto.supported ? '本平台不支持'
+    : (auto.installed ? `已启用（${auto.kind}）` : `未启用（${auto.kind}）`);
+
+  const bytes = (n) => {
+    if (n >= 1048576) return `${(n / 1048576).toFixed(1)} MB`;
+    if (n >= 1024) return `${Math.round(n / 1024)} KB`;
+    return `${n} B`;
+  };
+
+  const d = sys.data || {};
+  const img = d.images || { total: 0, days: [] };
+
+  return h('section', { class: 'group' },
+    h('h2', { text: '运行状态' }),
+    h('div', { class: 'card' },
+      row('桥接进程', sys.bridge && sys.bridge.running ? `运行中（pid ${sys.bridge.pid}）` : '没在运行',
+        '看 data/bridge.pid 里的进程是否还活着。没在跑时飞书那边不会有任何反应。'),
+      row('开机自启', autoText, '由 node setup/install.js --autostart 安装，这里是只读状态。'),
+      row('平台 / Node', `${sys.platform} · ${sys.node}`),
+      row('数据目录', d.dataDir || '', '会话、话题、图片、映射表都在这里。'),
+      row('日志目录', `${d.logDir || ''}（${bytes((d.logs || {}).bytes || 0)}）`),
+      row('图片', `${img.total} 个文件 · 最近 ${(img.days || []).length} 个日期目录`,
+        '按日期目录整目录删，保留天数见上面的「清理」分组。'),
+      row('会话记录', `${d.sessions || 0} 个`, 'data/sessions/ 下的窗口注册记录。')));
+}
+
+function buildNav() {
+  navEl.textContent = '';
+  navEl.textContent = '';
+
+  // 左侧分三段：通用配置 / 飞书消息（来自 schema.pages），以及每个插件各一页。
+  // 页面标题、顺序、有哪些页全部来自后端，这里一个都不写死。
+  const section = (label, items) => {
+    if (!items.length) return;
+    navEl.appendChild(h('div', { class: 'navsect', text: label }));
+    for (const [scope, name, ico] of items) {
+      const btn = h('button', {
+        type: 'button', dataset: { scope },
+        // 清提示放在点击里，不放 select() 里：保存成功后会重渲染并再调一次 select()，
+        // 那样刚显示出来的「已写入 N 处改动」会立刻被自己清掉。
+        onclick: () => { select(scope); showMsg(''); },
+      }, h('span', { class: 'ico', text: ico }), h('span', { class: 'nm', text: name }));
+      navEl.appendChild(btn);
+    }
+  };
+
+  const pageIcons = { general: '⚙', feishu: '✈' };
+  const pages = (S.schema.pages || []).map((p) => [`page:${p.id}`, p.title, pageIcons[p.id] || '•']);
+  section('设置', pages);
+
+  // 核心插件不单独成页：它的配置项全都标了 ui:page，已经并进「飞书消息」。
+  // 它确实是 plugins/core/（代码上是个插件），但没有可以单独调整的东西，
+  // 硬留一个空页只会让人以为「这里还有东西没展示」。
+  const allPlugins = Object.entries(S.schema.plugins || {});
+  const optional = allPlugins.filter(([, p]) => !p.core);
+  section('插件', optional.map(([id, p]) => [id, p.name || id, '▤']));
+
+  sidefoot.textContent = S.configFile || '';
+}
+
+function select(scope) {
+  active = scope;
+  for (const b of navEl.querySelectorAll('button')) {
+    b.setAttribute('aria-current', b.dataset.scope === scope ? 'true' : 'false');
+  }
+  renderPanel(scope);
+}
+
+// ---- 收集表单值 ----
+
+// 面板是一次只渲染一个的，所以不能靠「扫 DOM」收集——没打开过的面板根本不在树上。
+// 草稿随每次输入更新，它是唯一来源；这里只做提交前的形状检查。
+function payload() {
+  const bad = [];
+  const check = (scope, props, vals) => {
+    for (const [k, spec] of Object.entries(props || {})) {
+      if (!(k in vals)) continue;
+      const v = vals[k];
+      const t = spec.type;
+      if ((t === 'object' || t === 'array') && typeof v === 'string') {
+        try { vals[k] = JSON.parse(v); } catch (e) { bad.push(`${k} 的 JSON 写错了：${e.message}`); }
+      } else if ((t === 'integer' || t === 'number') && typeof v === 'string') {
+        const n = Number(v);
+        if (v === '' || !Number.isFinite(n)) bad.push(`${k} 不是数字`);
+        else vals[k] = n;
+      }
+    }
+  };
+
+  const values = { top: { ...draft.top }, plugins: {} };
+  check('top', S.schema.top.properties, values.top);
+  for (const [id, p] of Object.entries(S.schema.plugins || {})) {
+    if (!draft.plugins[id]) continue;
+    values.plugins[id] = { ...draft.plugins[id] };
+    check(id, (p.schema || {}).properties, values.plugins[id]);
+  }
+  return { values, bad };
+}
+
+// ---- 预览 / 写入 ----
+
+function renderDiff(plan, canApply) {
+  dlgBody.textContent = '';
+
+  if (plan.errors && plan.errors.length) {
+    dlgBody.appendChild(h('ul', { class: 'charset errs' },
+      ...plan.errors.map((e) => h('li', { text: e }))));
+  }
+  if (plan.warnings && plan.warnings.length) {
+    dlgBody.appendChild(h('ul', { class: 'charset warns' },
+      ...plan.warnings.map((w) => h('li', { text: w }))));
+  }
+
+  if (!plan.diff || !plan.diff.length) {
+    dlgBody.appendChild(h('div', { class: 'note', text: '没有要改的内容。' }));
+    if (plan.content) dlgBody.appendChild(h('pre', { class: 'content', text: plan.content }));
+    dlgApply.hidden = true;
+    return;
+  }
+
+  const rows = plan.diff.map((d) => h('tr', {},
+    h('td', { text: d.path }),
+    h('td', { class: 'old', text: d.from === null ? '未设置' : fmt(d.from) }),
+    h('td', { class: 'new', text: d.to === null ? '删除（用默认值）' : fmt(d.to) })));
+
+  dlgBody.appendChild(h('table', { class: 'diff' },
+    h('thead', {}, h('tr', {},
+      h('th', { text: '配置项' }), h('th', { text: '现在' }), h('th', { text: '改后' }))),
+    h('tbody', {}, ...rows)));
+  dlgBody.appendChild(h('div', {
+    class: 'note',
+    text: '改回默认值的项不会写进 config.json（写下来只会让文件越变越长）。下面是将要写出的完整内容。',
+  }));
+  dlgBody.appendChild(h('pre', { class: 'content', text: plan.content }));
+
+  dlgApply.hidden = !canApply;
+}
+
+// wantRestart=true 时，确认写入后接着重启桥接。
+let pendingRestart = false;
+
+async function preview(allowApply, wantRestart) {
+  pendingRestart = !!wantRestart;
+  const { values, bad } = payload();
+  if (bad.length) { showMsg(bad.join('；'), 'err'); return; }
+  showMsg('正在校验…');
+  try {
+    const r = await api('/api/preview', values);
+    renderDiff(r, allowApply && r.errors.length === 0);
+    dlgTitle.textContent = allowApply
+      ? (r.errors.length ? '有错误，不能写入'
+        : (wantRestart ? '确认写入并重启桥接' : '确认写入 config.json'))
+      : '改动预览（不写入）';
+    dlgApply.textContent = wantRestart ? '写入并重启' : '确认写入';
+    dlg.showModal();
+    showMsg('');
+  } catch (e) {
+    showMsg(e.message, 'err');
+  }
+}
+
+async function apply() {
+  const { values, bad } = payload();
+  if (bad.length) { showMsg(bad.join('；'), 'err'); return; }
+  dlgApply.disabled = true;
+  const wantRestart = pendingRestart;
+  try {
+    if (wantRestart) showMsg('正在写入并重启…');
+    const r = await api('/api/save', { ...values, restart: wantRestart });
+    if (!r.ok) {
+      showMsg((r.errors || ['写入失败']).join('；'), 'err');
+      renderDiff(r, false);
+      dlg.showModal();
+      return;
+    }
+    dlg.close();
+
+    if (!r.changed) {
+      // 没改动也可以重启：有人只是想把卡住的桥接拉起来
+      if (!wantRestart) { showMsg('内容与磁盘上一致，没有写入。', 'ok'); return; }
+    } else {
+      showMsg(`已写入 ${r.diff.length} 处改动${r.backup ? '，旧文件已备份' : ''}。`, 'ok');
+    }
+
+    if (wantRestart && r.restart) {
+      const rs = r.restart;
+      if (rs.ok) {
+        showMsg(`已写入 ${r.diff.length} 处改动${r.backup ? '，旧文件已备份' : ''}，桥接已重启（pid ${rs.pid}）。`, 'ok');
+      } else {
+        // 重启失败要说清楚「配置已保存」，否则用户会以为改动丢了
+        showMsg(`配置已保存，但重启没成功：${rs.errors.join('；')}`, 'err');
+      }
+    }
+    await load(active);        // 重新读盘，让「恢复默认」与运行状态跟着更新
+  } catch (e) {
+    showMsg(e.message, 'err');
+  } finally {
+    dlgApply.disabled = false;
+    pendingRestart = false;
+  }
+}
+
+// ---- 启动 ----
+
+async function load(keepScope) {
+  try {
+    S = await api('/api/state');
+  } catch (e) {
+    pageEl.textContent = '';
+    pageEl.appendChild(h('div', { class: 'loading', text: `读不到配置：${e.message}` }));
+    showMsg(e.message, 'err');
+    return;
+  }
+  // 草稿与磁盘同步。切面板不重读，只有保存成功后 load() 才会重置它。
+  draft = { top: { ...S.values.top }, plugins: {} };
+  for (const [id, vals] of Object.entries(S.values.plugins || {})) draft.plugins[id] = { ...vals };
+
+  buildNav();
+  // 默认停在第一个页面级面板（通用配置），不再是已被拆掉的 'top'
+  const firstPage = (S.schema.pages && S.schema.pages[0]) ? `page:${S.schema.pages[0].id}` : null;
+  const ids = [firstPage, ...(S.schema.pages || []).slice(1).map((p) => `page:${p.id}`),
+    ...Object.keys(S.schema.plugins || {})].filter(Boolean);
+  const want = keepScope && ids.includes(keepScope) ? keepScope : ids[0];
+  select(want);
+}
+
+document.getElementById('btn-preview').addEventListener('click', () => preview(false, false));
+document.getElementById('btn-save').addEventListener('click', () => preview(true, false));
+document.getElementById('btn-save-restart').addEventListener('click', () => preview(true, true));
+document.getElementById('dlg-cancel').addEventListener('click', () => dlg.close());
+dlgApply.addEventListener('click', apply);
+
+// 先把主题贴上去再渲染，避免浅色闪一下再变深
+applyTheme(currentTheme());
+load();
+</script>
+</body>
+</html>

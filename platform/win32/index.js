@@ -175,5 +175,12 @@ module.exports = {
     kind: 'startup-folder',
     install: path.join(HERE, 'install-autostart.ps1'),
     remove: path.join(HERE, 'remove-autostart.ps1'),
+    // 装没装：看启动文件夹里那个快捷方式在不在。
+    // 由平台层自己回答，页面不必知道「Windows 用的是 .lnk」这种细节。
+    installed() {
+      const startup = path.join(process.env.APPDATA || '', 'Microsoft', 'Windows',
+        'Start Menu', 'Programs', 'Startup', 'ClaudeFeishuBridge.lnk');
+      try { return fs.existsSync(startup); } catch (_) { return false; }
+    },
   },
 };

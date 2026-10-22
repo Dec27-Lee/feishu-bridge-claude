@@ -1,6 +1,6 @@
 {
   "name": "feishu-bridge-claude",
-  "version": "1.0.4",
+  "version": "1.1.0",
   "description": "用飞书手机端远程操控本机多个 Claude Code 窗口",
   "main": "kernel/index.js",
   "scripts": {

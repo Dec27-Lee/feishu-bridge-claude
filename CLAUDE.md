@@ -1,4 +1,4 @@
-# feishu-bridge-claude
+# Feishu Bridge Claude
 
 用飞书手机端远程操控本机多个 Claude Code 窗口。
 **这份文件是给维护这个项目的 AI 看的**——安装步骤在 `docs/INSTALL.md`，
@@ -70,6 +70,7 @@ setup/            安装、联调、更新、自测（都是给 AI 用的）
   update.js       更新项目 + 迁移配置
   move.js         换目录：停进程 → 复制 → 改 hooks/cc-switch/自启 → 重启 → 体检
   release.js      发 GitHub Release（正文取自 CHANGELOG 的对应小节）
+  config-ui.js    可视化配置页（读 schema 渲染，写成 config-ui/server.js + page.html）
   hooks-config.js hooks 内容定义（settings 和 cc-switch 共用同一份）
   feishu/         权限与事件清单（可整段导入后台）
   selftest/       沙箱自测：伪造 lark-cli 跑通主链路，不碰真实配置

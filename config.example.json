@@ -26,7 +26,8 @@
     },
     "notify": {
       "threadMode": true,
-      "chunkChars": 4000
+      "chunkChars": 4000,
+      "showUserPrompt": true
     },
     "permission": {
       "presenceAware": true,
