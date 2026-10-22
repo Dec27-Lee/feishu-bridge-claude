@@ -69,6 +69,7 @@ setup/            安装、联调、更新、自测（都是给 AI 用的）
   verify.js       联调（真调飞书 API，只读）
   update.js       更新项目 + 迁移配置
   move.js         换目录：停进程 → 复制 → 改 hooks/cc-switch/自启 → 重启 → 体检
+  release.js      发 GitHub Release（正文取自 CHANGELOG 的对应小节）
   hooks-config.js hooks 内容定义（settings 和 cc-switch 共用同一份）
   feishu/         权限与事件清单（可整段导入后台）
   selftest/       沙箱自测：伪造 lark-cli 跑通主链路，不碰真实配置
@@ -181,30 +182,21 @@ node setup/verify.js          # 真调飞书 API 的联调
   不写类名、函数、测试、构建、协议这类实现细节。
 - 逐个覆盖本次独立可感知的变化，一条一件事；不要合并成「能力增强」这种空话，也不要同一功能写两遍。
 
-### 提交时一并打 tag
+### 发版：CHANGELOG = tag = Release
 
-**CHANGELOG 的版本号 = Git tag = 用户看到的版本，三者必须一一对应。**
-以前只写 CHANGELOG 不打 tag，别人从 GitHub 上根本认不出哪次提交是 1.0.3。
-
-流程固定为四步，顺序不能换：
+**只打 tag 不算发版**——tag 只是指针，GitHub 的 Releases 页面得单独建。
 
 ```bash
-# 1. 先确认这次改了哪一格、版本号接得上（不要跳号，也不要复用）
-grep -m1 '^## ' CHANGELOG.md
-git tag -l
-
-# 2. 提交（提交信息里带这次版本覆盖的事，见 CHANGELOG）
+grep -m1 '^## ' CHANGELOG.md   # 确认版本号，不跳号不复用
 git add -A && git commit
-
-# 3. 打带注释的 tag，名字是 v + CHANGELOG 里那个版本号
 git tag -a v1.0.4 -m "1.0.4"
-
-# 4. 分支和 tag 一起推，别只推分支
 git push origin main && git push origin v1.0.4
+node setup/release.js          # 正文取自 CHANGELOG 对应小节
 ```
 
-- tag 名统一 `v<版本号>`（`v1.0.4`），与 CHANGELOG 标题的 `1.0.4` 只差前缀。
-- **一个版本只打一次 tag**，打了就不改、不挪、不删。要重发就升版本号，不要 `-f` 推 tag。
-- tag 必须指向**含该版本 CHANGELOG 条目的那次提交**，不能指向之后才补的提交。
-- 忘了打 tag 的旧版本不要回头补——补出来的 tag 顺序是假的，反而更难判断谁先谁后。
+- tag 名 `v<版本号>`，必须指向**含该版本 CHANGELOG 条目**的那次提交。
+- 一个版本只打一次 tag，不改不挪不删；要重发就升版本号，不要 `-f` 推 tag。
+- 忘了打的旧版本不回头补——补出来的顺序是假的。
+- `package.json` 的 `version` 跟着一起对齐（没有代码读它，但装包的人会看到）。
+- `release.js` 可重复跑：已存在就更新正文，正文一致则跳过；取不到凭据直接报错。
 

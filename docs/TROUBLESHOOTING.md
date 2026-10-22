@@ -16,6 +16,7 @@
 | 自测（不碰真实配置） | `node setup/selftest/run.js` |
 | 看全部可配项 | `node kernel/config.js --dump` |
 | 打印飞书权限/事件清单 | `node setup/feishu/scopes.js` |
+| 发 GitHub Release | `node setup/release.js [版本] [--dry-run]`（发版流程见 `CLAUDE.md`） |
 | 重启 | Windows：`Stop-Process -Id (Get-Content data/bridge.pid) -Force`<br>macOS / Linux：`kill $(cat data/bridge.pid)`<br>（装了自启会被自动拉回来） |
 | 看在场状态 | `data/presence.json`——`idleSeconds` 空闲秒数、`locked` 是否锁屏 |
 | 改配置 | 编辑 `config.json` → 重启 |
