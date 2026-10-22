@@ -13,7 +13,7 @@
 ' build a small .cmd that clears them before launching.
 Option Explicit
 
-Dim args, sessionId, cwd, resumeId, sh, fso, batPath, cmd, f, vars, i
+Dim args, sessionId, cwd, resumeId, sh, fso, batPath, cmd, f, vars, i, wtExe, candidates
 
 Set args = WScript.Arguments
 If args.Count < 2 Then
@@ -51,5 +51,20 @@ End If
 f.Close
 
 ' -w new : brand-new terminal window; keep it open after claude exits
-cmd = "wt.exe -w new new-tab --title ""claude " & Left(sessionId, 8) & """ cmd.exe /k """ & batPath & """"
+'
+' wt.exe 不在 PATH 里是常态：它装在 %LOCALAPPDATA%\Microsoft\WindowsApps，
+' 而这个目录只在交互式登录的 PATH 里出现，从 node 子进程继承来的 PATH 往往没有。
+' 所以先找绝对路径，找不到再退回裸命令（PATH 里有的话仍能work）。
+
+wtExe = ""
+
+candidates = Array( _
+  sh.ExpandEnvironmentStrings("%LOCALAPPDATA%") & "\Microsoft\WindowsApps\wt.exe", _
+  "C:\Program Files\WindowsApps\Microsoft.WindowsTerminal_8wekyb3d8bbwe\wt.exe")
+For i = 0 To UBound(candidates)
+  If wtExe = "" And fso.FileExists(candidates(i)) Then wtExe = candidates(i)
+Next
+If wtExe = "" Then wtExe = "wt.exe"
+
+cmd = """" & wtExe & """ -w new new-tab --title ""claude " & Left(sessionId, 8) & """ cmd.exe /k """ & batPath & """"
 sh.Run cmd, 1, False
