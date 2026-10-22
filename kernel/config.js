@@ -236,7 +236,7 @@ const TOP_SCHEMA = {
     default: 200000,
     minimum: 1000,
     title: '上下文窗口上限',
-    description: '用于通知卡片上的用量百分比。不填则读 HUD 缓存。',
+    description: '通知卡片上用量百分比的分母。默认读 HUD 缓存里的真实值（推荐，能跟着模型换代走）；只有缓存取不到时才用这里的值。',
     'ui:group': '显示',
     'ui:widget': 'number',
   },

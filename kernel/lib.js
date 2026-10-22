@@ -710,21 +710,40 @@ function formatTokens(n, largeDigits = 1) {
 }
 
 // 上下文窗口大小：Claude Code 只把它喂给 statusLine 的 stdin，Stop hook 拿不到。
-// 优先用 config 里的显式值；没配就尝试复用 HUD 插件按转录路径哈希落盘的缓存。
+//
+// 优先级：**HUD 缓存优先，配置兜底**（曾经反过来）。
+// 缓存是每次 statusLine 刷新时按会话真实窗口写下的，能反映「这个模型此刻是多少」；
+// 配置里的值是写死的，模型换代（200k → 500k）之后它就永远偏小，
+// 表现是进度条早早打满 100%、百分比再也动不了——查起来完全不像配置问题。
 function contextWindowSize(transcriptPath, cfg) {
-  if (cfg && cfg.contextWindowSize) return cfg.contextWindowSize;
   try {
     const crypto = require('crypto');
     const hash = crypto.createHash('sha256').update(path.resolve(transcriptPath)).digest('hex');
     const cache = path.join(os.homedir(), '.claude', 'plugins', 'claude-hud-plus',
       'context-cache', `${hash}.json`);
     const j = JSON.parse(fs.readFileSync(cache, 'utf8'));
-    if (j && j.context_window_size) return j.context_window_size;
+    // 缓存超过一天就不可信了（会话早就换过模型），退回配置
+    if (j && j.context_window_size && Date.now() - (j.saved_at || 0) < 24 * 3600000) {
+      return j.context_window_size;
+    }
   } catch (_) {}
+  if (cfg && cfg.contextWindowSize) return cfg.contextWindowSize;
   return null;
 }
 
-// 卡片头部那一行上下文信息：`███░░░ 47% 234k · Tokens 401.0M`
+// 进度条 + 百分比。抽出来是为了能被自测覆盖——
+// 这段只在离线渲染时跑到，出错了没人会立刻发现，而它直接印在每张卡片上。
+//
+// filled 用 floor 不用 round：bar 满格必须严格等于 100%。
+// 用 round 的话 62% 会被画成 3/4 格、88% 以上直接画成 4 格满——
+// 用户看到「████ 100%」却配着 300k/500k 的数字，第一反应是「算错了」。
+function contextBar(used, win, cells = 4) {
+  const pct = Math.max(0, Math.min(100, Math.round((used / win) * 100)));
+  const filled = Math.max(0, Math.min(cells, Math.floor((pct / 100) * cells)));
+  return `${'█'.repeat(filled)}${'░'.repeat(cells - filled)} ${pct}%`;
+}
+
+// 卡片头部那一行上下文信息：`██░░ 62% 311k · Tokens 1.8B`
 // 只放进度条、百分比、当前上下文占用、累计消耗——别的都靠 📁/🕐 两行表达。
 // 取不到数据时返回空串。
 function statsLine(transcriptPath, cfg = readConfig()) {
@@ -737,13 +756,7 @@ function statsLine(transcriptPath, cfg = readConfig()) {
   const win = contextWindowSize(transcriptPath, cfg);
 
   const parts = [];
-  if (win) {
-    const pct = Math.max(0, Math.min(100, Math.round((used / win) * 100)));
-    // 4 格：整行（图标+进度条+百分比+上下文+累计）在手机窄屏要能一行放下
-    const cells = 4;
-    const filled = Math.max(0, Math.min(cells, Math.round((pct / 100) * cells)));
-    parts.push(`${'█'.repeat(filled)}${'░'.repeat(cells - filled)} ${pct}%`);
-  }
+  if (win) parts.push(contextBar(used, win));
   parts.push(formatTokens(used));
   if (t.total) parts.push(`· Tokens ${formatTokens(t.total, 1)}`);
 
@@ -797,7 +810,7 @@ module.exports = {
   readThreadRoot, writeThreadRoot, pinThreadRoot,
   discoverWorkspaces, normalizePath, isTrusted, discoverSessions,
   workspaceKey, trustWorkspace,
-  tailStats: transcriptTotals, transcriptTotals, contextWindowSize, statsLine, formatTokens,
+  tailStats: transcriptTotals, transcriptTotals, contextWindowSize, contextBar, statsLine, formatTokens,
   writePending, readPending, removePending,
   ROOT, DATA_DIR, SESSIONS_DIR, PENDING_DIR, MAPPING_FILE, LOG_DIR, CONFIG_FILE,
   ensureDirs, readConfig, log, larkSync,

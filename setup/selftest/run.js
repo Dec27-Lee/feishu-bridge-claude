@@ -588,6 +588,27 @@ async function main() {
       `added=${r2.added.length} removed=${r2.removed.length}`);
   }
 
+  console.log('\n9e. 上下文进度条');
+  {
+    // 这段只在离线渲染时跑到，错了没人立刻发现，但它印在每一张卡片上。
+    // 真实故障：分母写死 200000，而实际窗口是 500000 →
+    // 305k 的用量被算成 100%，进度条永远满格、百分比再也不动。
+    const { contextBar } = require(path.join(ROOT, 'kernel', 'lib.js'));
+    check('62% 不满格', contextBar(310000, 500000) === '██░░ 62%', contextBar(310000, 500000));
+    check('刚好 100% 才满格', contextBar(500000, 500000) === '████ 100%', contextBar(500000, 500000));
+    check('超了也只是满格不越界', contextBar(900000, 500000) === '████ 100%', contextBar(900000, 500000));
+
+    // 一致性：bar 满格 ⟺ 显示的百分比就是 100，不能出现「满格 + 98%」
+    let mismatch = 0;
+    for (let p = 0; p <= 100; p += 1) {
+      const s = contextBar(p * 5000, 500000);
+      const pct = Number((s.match(/(\d+)%/) || [])[1]);
+      const full = (s.match(/█/g) || []).length === 4;
+      if (full !== (pct === 100)) mismatch += 1;
+    }
+    check('进度条与百分比始终一致', mismatch === 0, `${mismatch} 处不一致`);
+  }
+
   console.log('\n10. 关停与残留锁接管');
   // Windows 上 kill() 是终止进程，SIGTERM 处理器不会跑，pid 文件必然残留。
   // 所以这里验证的不是「锁被清掉」，而是「下一个实例能把残留锁接管掉」——
