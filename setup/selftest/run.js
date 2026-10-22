@@ -179,6 +179,54 @@ async function main() {
   check('notify 带 Stop 与 Notification', loaded.some((x) => x.id === 'notify'
     && x.hooks.includes('Stop') && x.hooks.includes('Notification')));
 
+  // 静态扫描：模块里调用了但没定义/没导入的函数。
+  // node --check 查不出来（这是运行时 ReferenceError），而且只在对应代码路径
+  // 被走到时才炸——「换会话」「再开一个窗口」两个按钮就是这么沉默失效的：
+  // 按下去，日志里只有一行 ReferenceError，界面上毫无反应。
+  console.log('\n1b. 模块引用完整性');
+  {
+    const srcDir = path.join(ROOT, 'plugins', 'core', 'src');
+    const modFiles = fs.readdirSync(srcDir).filter((f) => f.endsWith('.js'));
+    const problems = [];
+    const builtins = new Set(['require', 'setInterval', 'setTimeout',
+      'clearInterval', 'clearTimeout', 'parseInt', 'parseFloat', 'isNaN']);
+
+    for (const f of modFiles) {
+      // 先剥注释：注释里出现 start( 之类的字样会被误判成未定义调用
+      const src = fs.readFileSync(path.join(srcDir, f), 'utf8')
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/(^|[^:])\/\/.*$/gm, '$1');
+      const defined = new Set();
+      for (const m of src.matchAll(/^(?:async )?function ([A-Za-z_$][\w$]*)/gm)) defined.add(m[1]);
+      for (const m of src.matchAll(/const ([A-Za-z_$][\w$]*)\s*=/g)) defined.add(m[1]);
+      for (const m of src.matchAll(/const \{([^}]+)\} = require/g)) {
+        m[1].split(',').forEach((x) => defined.add(x.trim().split(':').pop().trim()));
+      }
+      for (const m of src.matchAll(/const ([A-Za-z_$][\w$]*) = require/g)) defined.add(m[1]);
+      // 局部回调的参数（如 new Promise((resolve) => ...)）也算「已定义」，
+      // 否则会把它们误报成未定义符号。
+      for (const m of src.matchAll(/\(([^()]*)\)\s*=>/g)) {
+        m[1].split(',').forEach((x) => {
+          const n = x.trim().replace(/[={].*$/, '').trim();
+          if (/^[A-Za-z_$][\w$]*$/.test(n)) defined.add(n);
+        });
+      }
+      for (const m of src.matchAll(/function\s*[A-Za-z_$][\w$]*\s*\(([^)]*)\)/g)) {
+        m[1].split(',').forEach((x) => {
+          const n = x.trim().split(/[=\s]/)[0];
+          if (/^[A-Za-z_$][\w$]*$/.test(n)) defined.add(n);
+        });
+      }
+
+      const missing = new Set();
+      for (const m of src.matchAll(/(?:^|[^.\w])([a-z][A-Za-z0-9_]{3,})\(/g)) {
+        if (!defined.has(m[1]) && !builtins.has(m[1])) missing.add(m[1]);
+      }
+      if (missing.size) problems.push(f + ': ' + [...missing].join(', '));
+    }
+    check('core 模块无未定义的函数调用', problems.length === 0, problems.join(' | '));
+  }
+
   console.log('\n2. 内核启动');
   const bridge = spawn(process.execPath, [path.join(ROOT, 'kernel', 'index.js')], {
     cwd: ROOT, env: env(p), stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,

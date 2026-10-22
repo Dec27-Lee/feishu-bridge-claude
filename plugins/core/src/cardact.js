@@ -4,14 +4,14 @@
 
 const lib = require('../../../kernel/lib');
 const q = require('../../../kernel/questions');
-const { replyCard } = require('./reply');
+const { replyCard, sendCardNewTopic } = require('./reply');
 const {
   buildPermissionDoneCard, buildQuestionCard, buildAllAnsweredCard,
   answerOne, toggleOption, commitMulti,
 } = require('./qcards');
-const { buildPickedCard } = require('./cards-window');
+const { buildPickedCard, buildPickerCard } = require('./cards-window');
 const { launchWindow } = require('./launch');
-const { resumeSession } = require('./resume');
+const { resumeSession, startResume } = require('./resume');
 const { threadFromMessage, pickerCandidates } = require('./daemon');
 
 async function handleCardAction(ev) {

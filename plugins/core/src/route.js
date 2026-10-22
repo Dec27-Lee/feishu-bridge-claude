@@ -10,6 +10,7 @@
 const lib = require('../../../kernel/lib');
 const q = require('../../../kernel/questions');
 const session = require('./session');
+const { replyCard } = require('./reply');
 const { buildQuestionCard, buildAllAnsweredCard, answerOne } = require('./qcards');
 const { startNewTask, tryPickByNumber } = require('./newtask');
 
