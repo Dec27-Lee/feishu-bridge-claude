@@ -122,7 +122,7 @@ function buildPermissionCard(rec) {
     {
       tag: 'markdown',
       content: '「本会话不再问」会把规则写进本项目的 `.claude/settings.local.json`。\n'
-        + '一直不答会自动交给终端，需要有人在电脑上按。',
+        + '不答就一直等（最多 30 分钟）；期间你一回到电脑前，确认框会自动回到终端。',
     },
   ];
 
@@ -217,7 +217,7 @@ function buildQuestionCard(rec) {
     content: [
       '直接在**这个话题里回复文字**，就当作自定义答案（选项里没有的那个）。',
       cur.multiSelect ? '多选：点几个再点「就这些」。' : '',
-      '一直不答会自动交给终端，需要有人在电脑上按。',
+      '不答就一直等（最多 30 分钟）；期间你一回到电脑前，弹窗会自动交还终端。',
     ].filter(Boolean).join('\n'),
   });
 

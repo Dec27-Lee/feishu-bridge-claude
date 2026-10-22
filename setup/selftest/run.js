@@ -494,6 +494,31 @@ async function main() {
       && !!(dumped.plugins.ask.schema.properties.awayWaitSeconds || {})['x-ui'],
     Object.keys(dumped.plugins).join(','));
 
+  console.log('\n9b. 介入通知不重复');
+  {
+    // 场景：人在电脑前，ask 插件已推过提醒卡（记录标 noticeOnly 并 retire），
+    // 紧接着 Notification 事件也来了。不能因此再推一张重复卡片。
+    writePresence(p, { idleSeconds: 5, locked: false });
+    const qdir = path.join(p.data, 'questions');
+    fs.mkdirSync(qdir, { recursive: true });
+    fs.writeFileSync(path.join(qdir, 'dup-test.json'), JSON.stringify({
+      id: 'dup-test', kind: 'question', sessionId: 'dedup-sess', cwd: p.claude,
+      createdAt: Date.now(), noticeOnly: true, retiredAt: Date.now(),
+      presence: { level: 'here' }, questions: [{ question: 'Q?', options: [] }],
+    }));
+
+    const before = outbox(p).length;
+    runHook(p, 'plugins/notify/hooks/notify-input.js', {
+      hook_event_name: 'Notification',
+      session_id: 'dedup-sess',
+      cwd: p.claude,
+      notification_type: 'permission_prompt',
+      message: '需要确认',
+    });
+    const after = outbox(p).length;
+    check('已有待答记录时不再推重复通知', after === before, `${before} -> ${after}`);
+  }
+
   console.log('\n10. 关停与残留锁接管');
   // Windows 上 kill() 是终止进程，SIGTERM 处理器不会跑，pid 文件必然残留。
   // 所以这里验证的不是「锁被清掉」，而是「下一个实例能把残留锁接管掉」——

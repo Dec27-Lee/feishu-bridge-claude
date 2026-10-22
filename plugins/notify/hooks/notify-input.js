@@ -7,6 +7,7 @@ const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const lib = require('../../../kernel/lib');
+const q = require('../../../kernel/questions');
 
 function readStdin() {
   try {
@@ -65,6 +66,28 @@ const label = LABELS[kind] || '⚠️ 需要你介入';
 
 const cfg = lib.readConfig();
 const my = lib.readPluginConfig('notify');   // threadMode 属于本插件
+
+// 去重（跨插件）：ask / permission 插件已经在同一次介入里推过卡片了，这里就别再推一张。
+// 典型场景：人在电脑前，终端弹出选择题——ask 推一张不带按钮的提醒卡，
+// Notification 事件又推一张「等待输入」，用户手机上看到一模一样的两个提示。
+//
+// 判定不做类型匹配（不同版本 Claude Code 的通知类型名不稳定），只认一条：
+// 这个会话最近 2 分钟内有未结束的待答记录，说明介入已经被别的插件接管了。
+// 不能只查 q.listOpen：人在电脑前那条记录是 noticeOnly，bridge 发完提醒卡就 retire 了，
+// 而 Notification 事件往往正好落在这个空档里。所以直接扫目录，连已退休的一起看。
+const HANDLED_MS = 2 * 60 * 1000;
+try {
+  const dir = q.QUESTIONS_DIR;
+  const dup = fs.readdirSync(dir).filter((f) => f.endsWith('.json')).map((f) => {
+    try { return JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')); } catch (_) { return null; }
+  }).find((r) => r && r.sessionId === sessionId && !r.done
+    && Date.now() - (r.createdAt || 0) < HANDLED_MS);
+
+  if (dup) {
+    lib.log('notify', `跳过通知（${kind}）：该会话已有待答记录 ${dup.id}，由对应插件负责提醒`);
+    process.exit(0);
+  }
+} catch (_) {}
 const name = sessionName(sessionId, cwd, input.transcript_path);
 
 // 去重：同一窗口、同一类型、同一文案，10 分钟内只推一次，
