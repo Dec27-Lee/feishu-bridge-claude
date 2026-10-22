@@ -135,26 +135,53 @@ function deliver(session, text) {
   });
 }
 
-// 图片消息（message_type=post）在 content 里以 [Image: img_xxx] 形式出现。
+// 纯图片消息（message_type=image）的 content 是 JSON：`{"image_key":"img_xxx"}`。
+// 不转成统一标记的话，图下载不了，窗口收到的还是一串 JSON 字面量。
+// 带文字的图走 message_type=post，content 已经是 markdown 图片，不用转。
+function normalizeImageContent(content) {
+  const s = content.trim();
+  if (!s.startsWith('{')) return content;
+  try {
+    const j = JSON.parse(s);
+    if (j && typeof j.image_key === 'string') return `![Image](${j.image_key})`;
+  } catch (_) {}
+  return content;
+}
+
+// 图片消息（message_type=post）在 content 里是 markdown 图片：`![Image](img_v3_xxx)`。
+// 老版本飞书还给过 `[Image: img_xxx]` 这种写法，两种都认——
+// 只按其中一种写，另一种形态的图就会被静默当成普通文字投给窗口，
+// 用户以为发了图，窗口那边只看到一串 img_ 开头的字面量。
+const IMAGE_MARK_RE = /!\[[^\]]*\]\((img_[A-Za-z0-9_-]+)\)|\[Image:\s*(img_[A-Za-z0-9_-]+)\]/g;
+
 // 下载到本地后把标记换成绝对路径，窗口里的 Claude 可以用 Read 工具读图。
 function materializeImages(messageId, content) {
-  const keys = [...content.matchAll(/\[Image:\s*(img_[A-Za-z0-9_-]+)\]/g)].map((m) => m[1]);
-  if (!keys.length) return content;
+  content = normalizeImageContent(content);
+  const found = [];
+  for (const m of content.matchAll(IMAGE_MARK_RE)) {
+    const key = m[1] || m[2];
+    if (!found.some((f) => f.key === key)) found.push({ key, raw: m[0] });
+  }
+  if (!found.length) return content;
 
-  const day = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+  // 按**本地**日期分目录，方便按天找图和手工清理。
+  // 不用 toISOString()：那是 UTC，北京时间早上 8 点前的图会落到前一天。
+  const d = new Date();
+  const day = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
   const dir = path.join(IMAGES_DIR, day);
   fs.mkdirSync(dir, { recursive: true });
 
   let text = content;
-  keys.forEach((key, i) => {
-    const rel = `${messageId}_${i + 1}.png`; // --output 只接受相对路径，故配合 cwd
+  found.forEach(({ key, raw }, i) => {
+    const rel = `${messageId}_${i + 1}.png`; // --output 走相对路径，配合 cwd 落到日期目录
     const abs = path.join(dir, rel);
     lib.larkSync(['im', '+messages-resources-download', '--as', 'bot',
       '--message-id', messageId, '--file-key', key, '--type', 'image',
       '--output', rel], { cwd: dir, timeoutMs: 40000 });
 
     const ok = fs.existsSync(abs);
-    text = text.replace(`[Image: ${key}]`, ok ? `[图片] ${abs}` : `[图片下载失败: ${key}]`);
+    // 同一张图可能在正文里被引用多次，split/join 一起换掉
+    text = text.split(raw).join(ok ? `[图片] ${abs}` : `[图片下载失败: ${key}]`);
     lib.log('image', `${ok ? '已下载' : '下载失败'} ${key} -> ${abs}`);
   });
   return text;

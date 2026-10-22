@@ -144,6 +144,18 @@ async function launchWindow(threadId, messageId, cwd, resumeSid) {
     }
   }
   lib.log('error', `${isResume ? '恢复会话' : '新窗口'} ${sessionId} ${timeoutSec} 秒内未注册`);
+
+  // 超时的窗口自己收掉。留着没人管：用户下次重试又是一个新窗口，
+  // 攒下来就是一屏卡在信任确认框上的空终端。按 sessionId 定位，只关自己开的。
+  try {
+    if (typeof platform.closeWindow === 'function') {
+      const closed = platform.closeWindow({ sessionId });
+      lib.log('bridge', `超时窗口${closed ? '已关闭' : '未找到（可能已退出）'} ${sessionId.slice(0, 8)}`);
+    }
+  } catch (e) {
+    lib.log('error', `关超时窗口失败 ${sessionId}：${e.message}`);
+  }
+
   replyCard(messageId, {
     schema: '2.0',
     config: { wide_screen_mode: true },

@@ -136,6 +136,41 @@ module.exports = {
     }
   },
 
+  // 关掉某个 sessionId 对应的窗口。
+  //
+  // 两条路都要走，因为**窗口和进程不是一一对应**的：
+  //   1) 进程：`cmd.exe /k %TEMP%\cc-launch-<前8位>.cmd` 是窗口里那个根进程，
+  //      关它要带 /T 连子孙一起关（claude.exe 是孙进程，只关 cmd 会留孤儿）。
+  //   2) 窗口：只杀进程的话 Windows Terminal 会把标签页留下显示「已退出」，
+  //      窗口本身还在——用户看到的仍是「又开了一堆终端」。所以再关标签页。
+  // 两处都按 sessionId 定位，不碰用户手开的窗口。
+  closeWindow({ sessionId }) {
+    const tag = String(sessionId).slice(0, 8);
+    let acted = false;
+
+    const ps = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+      "Get-CimInstance Win32_Process -Filter \"Name='cmd.exe'\" | "
+      + `Where-Object { $_.CommandLine -like '*cc-launch-${tag}*' } | `
+      + 'ForEach-Object { $_.ProcessId }'], { encoding: 'utf8', timeout: 15000 });
+    const pids = (ps.stdout || '').trim().split(/\s+/).filter((x) => /^\d+$/.test(x));
+    for (const p of pids) {
+      try {
+        spawnSync('taskkill', ['/PID', p, '/T', '/F'], { timeout: 15000, windowsHide: true });
+        acted = true;
+      } catch (_) {}
+    }
+
+    const closer = path.join(HERE, 'close-window.ps1');
+    if (fs.existsSync(closer)) {
+      const r = spawnSync('powershell.exe',
+        ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', closer, tag],
+        { encoding: 'utf8', timeout: 20000 });
+      if ((r.stdout || '').includes('closed')) acted = true;
+    }
+
+    return acted;
+  },
+
   autostart: {
     kind: 'startup-folder',
     install: path.join(HERE, 'install-autostart.ps1'),

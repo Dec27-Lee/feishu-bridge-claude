@@ -70,6 +70,9 @@ if [ -z "$CLAUDE_BIN" ]; then
 fi
 
 if [ "$(uname)" = "Darwin" ]; then
+  # 把窗口 id 记下来，超时／清理时 closeWindow 才能只关自己开的那个窗口
+  ID_FILE="${TMPDIR:-/tmp}/cc-launch-$(echo "$SESSION_ID" | cut -c1-8).id"
+  rm -f "$ID_FILE"
   if [ -d "/Applications/iTerm.app" ]; then
     osascript <<APPLESCRIPT
 tell application "iTerm"
@@ -78,6 +81,7 @@ tell application "iTerm"
   tell current session of newWindow
     write text "bash '$BAT'"
   end tell
+  return id of newWindow
 end tell
 APPLESCRIPT
   else
@@ -85,10 +89,15 @@ APPLESCRIPT
 tell application "Terminal"
   activate
   do script "bash '$BAT'"
+  return id of window 1
 end tell
 APPLESCRIPT
-  fi
+  fi > "$ID_FILE" 2>/dev/null || rm -f "$ID_FILE"
 else
+  # 记下终端进程的 pid：超时／清理时 closeWindow 靠它按 sessionId 找到对应的窗口，
+  # 不靠窗口标题（同名窗口会误伤），也不靠临时文件名（mktemp 是随机的，命令行里没有 id）
+  PID_FILE="${TMPDIR:-/tmp}/cc-launch-$(echo "$SESSION_ID" | cut -c1-8).pid"
+  rm -f "$PID_FILE"
   for term in gnome-terminal konsole xfce4-terminal xterm; do
     if command -v "$term" >/dev/null 2>&1; then
       # 后台启动 + 立刻返回。不用 exec：exec 会把这个脚本换成常驻的终端进程，
@@ -99,6 +108,7 @@ else
         konsole)        "$term" -e bash "$BAT" >/dev/null 2>&1 & ;;
         *)              "$term" -e "bash '$BAT'" >/dev/null 2>&1 & ;;
       esac
+      echo $! > "$PID_FILE" 2>/dev/null || rm -f "$PID_FILE"
       sleep 0.5
       exit 0
     fi

@@ -3,8 +3,11 @@
 // 未适配的平台（Linux 等）。
 //
 // 只保证「装得上、不崩」：话题路由、卡片作答、任务通知全靠内核 + 插件，
-// 与平台无关，所以 Linux 上主要功能是可用的。
+// 与平台无关，所以这些平台上主要功能是可用的。
 // 缺的是自动开窗和在场探测——两者都能优雅降级。
+//
+// 目前 Linux 与 macOS 都已有自己的实现（platform/linux、platform/darwin），
+// 这里只兜住 FreeBSD 之类还没人适配的系统。
 
 module.exports = {
   name: process.platform,

@@ -14,6 +14,7 @@
 //   stopPresence()           收掉本进程的采样器
 //   stopAllPresence()        收掉「本目录下」所有采样器（含上一个 bridge 的孤儿），返回 pid 列表
 //   spawnWindow(opts)        开一个新终端窗口跑 claude，失败抛错
+//   closeWindow(opts)        关掉某个 sessionId 开的窗口（可选；不支持就别实现）
 //   pidAlive(pid)            进程是否真的还活着
 //   autostart                { kind, install, remove }，install/remove 为脚本绝对路径或 null
 //

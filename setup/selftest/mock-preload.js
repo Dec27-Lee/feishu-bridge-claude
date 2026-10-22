@@ -50,7 +50,7 @@ function ok(stdout) {
 }
 
 // 按 argv 分派，覆盖项目实际用到的全部命令
-function handle(argv) {
+function handle(argv, opts) {
   const a = argv.slice();
   // 跳过可能存在的 --as bot 之类的通用参数不影响判断，按位置识别
   const first = a[0] || '';
@@ -98,7 +98,17 @@ function handle(argv) {
       return ok({ ok: true, data: { message_id: mid, thread_id: 'omt_mock' } });
     }
 
-    if (sub === '+messages-resources-download') return ok({ ok: true });
+    if (sub === '+messages-resources-download') {
+      // 真的落一个文件：调用方下载完是用 existsSync 判断成败的，
+      // 只回 ok 不落地会让所有图片都被判成「下载失败」。
+      const j = a.indexOf('--output');
+      const out = j >= 0 ? a[j + 1] : '';
+      const cwd = (opts && opts.cwd) || process.cwd();
+      if (out) {
+        try { fs.writeFileSync(path.resolve(cwd, out), 'mock-image'); } catch (_) {}
+      }
+      return ok({ ok: true, data: { saved_path: out, size_bytes: 10 } });
+    }
     if (sub === 'pins' || sub === '+pins' || sub === 'pin') return ok({ ok: true });
     return ok({ ok: true });
   }
@@ -129,12 +139,43 @@ cp.spawnSync = function patched(cmd, args, opts) {
   if (intercept(cmd)) {
     const argv = Array.isArray(args) ? args : [];
     append(CALLS, { argv });
-    return handle(argv);
+    return handle(argv, opts);
+  }
+  // 开窗一律拦掉：自测跑一遍要「回序号 → 开窗」，照直执行会在用户桌面上
+  // 真弹一个终端跑 claude，而且跑完没人关，几次下来满屏终端。
+  // 这里只模拟「脚本生成成功」这一步——spawnWindow 正是用它判定成败的。
+  //
+  // 两个平台拦的是不同的东西：
+  //   Windows  platform/win32 → spawnSync('cscript.exe', [...])
+  //   macOS/Linux platform/{darwin,linux} → spawnSync('bash', [launch-claude.sh, ...])
+  // 只拦 cscript 的话，在 mac/Linux 上跑自测会真的开终端窗口。
+  const isWinLaunch = /^cscript(\.exe)?$/i.test(String(cmd));
+  const isNixLaunch = /^bash$/i.test(String(cmd))
+    && Array.isArray(args) && String(args[0] || '').endsWith('launch-claude.sh');
+  if (isWinLaunch || isNixLaunch) {
+    const argv = Array.isArray(args) ? args : [];
+    // win: //nologo <vbs> <sessionId> <cwd> [resumeId]
+    // nix: <launch-claude.sh> <sessionId> <cwd> [resumeId]
+    const sid = isWinLaunch ? (argv[2] || `mock${++seq}`) : (argv[1] || `mock${++seq}`);
+    const ext = isWinLaunch ? 'cmd' : 'sh';
+    const bat = path.join(process.env.TEMP || process.env.TMPDIR || path.join(MOCK_DIR, 'tmp'),
+      `cc-launch-${String(sid).slice(0, 8)}.${ext}`);
+    try {
+      fs.mkdirSync(path.dirname(bat), { recursive: true });
+      fs.writeFileSync(bat, '@echo off\r\nrem mock launch\r\n', 'utf8');
+    } catch (_) {}
+    append(CALLS, { note: 'launch mocked', sessionId: sid });
+    return { status: 0, stdout: '', stderr: '', error: null };
   }
   // tasklist / ps：桥接用来判断进程是否活着，自测里一律回答「活着」
   if (/^tasklist(\.exe)?$/i.test(String(cmd))) {
     const pid = (Array.isArray(args) ? args : []).join(' ').match(/\d+/);
     return { status: 0, stdout: `node.exe ${pid ? pid[0] : '1'} Console 1 1,000 K`, stderr: '', error: null };
+  }
+  if (/^ps$/i.test(String(cmd))) {
+    // macOS/Linux 的 pidAlive / stopAllPresence 用 `ps -p <pid> -o comm=`
+    const pid = (Array.isArray(args) ? args : []).join(' ').match(/\d+/);
+    return { status: 0, stdout: `${pid ? pid[0] : '1'} node\n`, stderr: '', error: null };
   }
   return realSpawnSync.apply(this, arguments);
 };

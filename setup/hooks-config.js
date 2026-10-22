@@ -29,8 +29,25 @@ function p(rel) {
 // 这在 check.js 里被显式检查（hooks-node 项），不会悄无声息地坏掉。
 const NODE = process.execPath.split(path.sep).join('/');
 
+// hook 命令的拼法**按平台不同**，这里踩过两个坑：
+//
+// Windows：Claude Code 用 `cmd.exe /c <command>` 执行，cmd 不会把
+//   `"node.exe" "script.js"` 拆成两个参数——整串当成一个程序名，直接报
+//   「不是内部或外部命令」。表现是新窗口里一条 `SessionStart hook error`，
+//   所有 hook 静默失效。所以 Windows 上**不加引号**。
+//   （代价：node 装在含空格的路径下会失败，那种情况只能用 8.3 短路径重装。）
+//
+// macOS / Linux：走 `sh -c`，引号本身是正常的 shell 语法，必须加——
+//   否则路径里有空格（家目录带空格、装到 /Applications 下）就会被拆开。
+function buildCommand(nodePath, scriptPath, platformName) {
+  const n = String(nodePath);
+  const s = String(scriptPath);
+  if (platformName === 'win32') return `${n} ${s}`;
+  return `"${n}" "${s}"`;
+}
+
 function hook(event, script, matcher, timeout) {
-  const h = { type: 'command', command: `"${NODE}" "${p(script)}"` };
+  const h = { type: 'command', command: buildCommand(NODE, p(script), process.platform) };
   if (timeout) h.timeout = timeout;
   return matcher ? { matcher, hooks: [h] } : { hooks: [h] };
 }
@@ -156,6 +173,6 @@ function staleEntries(settings) {
 
 module.exports = {
   HOOKS, ROOT, mergeInto, installed, stripOwn, staleEntries, isOwnCommand,
-  scriptPathFromCommand, OWN_SCRIPTS, NODE,
+  scriptPathFromCommand, OWN_SCRIPTS, NODE, buildCommand,
   paths: { ask: p('plugins/ask/hooks/ask-question.js') },
 };

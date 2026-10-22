@@ -4,6 +4,22 @@
 // 供飞书桥接进程向本窗口投递消息。
 // 必须在极短时间内返回，不做任何网络或重量级调用。
 
+// 最先落一行「我起来了」。新窗口里出现 "SessionStart hook error" 时，
+// 有没有这行决定排查方向：没有 = hook 根本没被执行（命令写法/路径问题），
+// 有 = 执行了但后面崩了。为此这里只用 fs/path/os，不 require 任何本项目模块。
+try {
+  const fs0 = require('fs');
+  const path0 = require('path');
+  const os0 = require('os');
+  const dir = process.env.FEISHU_LOG_DIR || path0.join(__dirname, '..', '..', 'logs');
+  fs0.appendFileSync(path0.join(dir, 'hook-boot.log'),
+    `[${new Date().toISOString()}] session-start 启动 pid=${process.pid} `
+    + `node=${process.execPath} cwd=${process.cwd()} `
+    + `argv=${JSON.stringify(process.argv.slice(1))} `
+    + `env: socket=${!!process.env.CLAUDE_CODE_MESSAGING_SOCKET} `
+    + `token=${!!process.env.CLAUDE_CODE_MESSAGING_TOKEN}\n`);
+} catch (_) { /* 探测失败不影响主流程 */ }
+
 const lib = require('../../kernel/lib');
 
 function readStdin() {

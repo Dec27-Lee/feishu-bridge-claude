@@ -85,6 +85,20 @@ module.exports = {
     return true;
   },
 
+  // Linux 的终端程序没有「按 id 关窗口」的统一接口，只能靠进程命令行定位。
+  // 难点：启动脚本的临时文件名是 mktemp 随机生成的，命令行里没有 sessionId。
+  // 解法：启动脚本把自身的 pid 写进 /tmp/cc-launch-<前8位>.pid，这里读回来。
+  closeWindow({ sessionId }) {
+    const tag = String(sessionId).slice(0, 8);
+    const pidFile = path.join(process.env.TMPDIR || '/tmp', `cc-launch-${tag}.pid`);
+    let pid = 0;
+    try { pid = parseInt(fs.readFileSync(pidFile, 'utf8').trim(), 10) || 0; } catch (_) { return false; }
+    if (!pid) return false;
+    try { process.kill(pid, 'SIGTERM'); } catch (_) {}
+    try { fs.unlinkSync(pidFile); } catch (_) {}
+    return true;
+  },
+
   pidAlive(pid) {
     if (!pid) return false;
     try {

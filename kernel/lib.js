@@ -166,15 +166,18 @@ function cleanup(cfg = readConfig()) {
   const report = { images: 0, sessions: 0, mappings: 0, logs: 0 };
   ensureDirs();
 
-  // 1) 图片：删除过期日期目录
+  // 1) 图片：按日期目录名判断，过期就整目录删。
+  // 用目录名而不是 mtime：目录里刚存进一张图会把 mtime 刷新，
+  // 按 mtime 算等于「只要还在收图，旧图永远不删」。
   const imgRoot = path.join(DATA_DIR, 'images');
   const imageTtlMs = (cfg.imageTtlDays || 7) * 86400000;
   if (fs.existsSync(imgRoot)) {
     for (const day of fs.readdirSync(imgRoot)) {
       const dir = path.join(imgRoot, day);
       try {
-        const st = fs.statSync(dir);
-        if (st.isDirectory() && now - st.mtimeMs > imageTtlMs) {
+        if (!/^\d{8}$/.test(day)) continue;      // 不是我们建的目录，不碰
+        const t = Date.UTC(+day.slice(0, 4), +day.slice(4, 6) - 1, +day.slice(6, 8));
+        if (now - t > imageTtlMs) {
           fs.rmSync(dir, { recursive: true, force: true });
           report.images += 1;
         }
@@ -894,7 +897,10 @@ function lastUserInput(file, maxBytes = 4 * 1024 * 1024) {
 
       const t = unwrap(raw);
       if (!t) continue;
-      if (FROM_FEISHU.some((m) => t.includes(m))) continue;   // 这轮是飞书发起的，别回音
+      // 这一轮是飞书发起的 → 直接收工返回 null，**不能** continue 往前找。
+      // 往前找会翻到上一轮终端里说的话，把它当成「你这一轮在终端里说」，
+      // 于是飞书回复的卡片上顶着一条早已无关的终端输入。
+      if (FROM_FEISHU.some((m) => t.includes(m))) return null;
       return t;
     }
   } catch (_) {}

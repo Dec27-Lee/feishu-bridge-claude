@@ -88,6 +88,20 @@ module.exports = {
     return true;
   },
 
+  // 关掉某个 sessionId 开的窗口。macOS 没有「按启动参数找窗口」的接口，
+  // 所以启动脚本把窗口 id 落在 %TMPDIR%/cc-launch-<前8位>.id 里，这里读回来关。
+  closeWindow({ sessionId }) {
+    const tag = String(sessionId).slice(0, 8);
+    const idFile = path.join(process.env.TMPDIR || '/tmp', `cc-launch-${tag}.id`);
+    let winId = '';
+    try { winId = fs.readFileSync(idFile, 'utf8').trim(); } catch (_) { return false; }
+    if (!winId) return false;
+    const script = `tell application "Terminal" to close (every window whose id is ${winId})`;
+    spawnSync('osascript', ['-e', script], { encoding: 'utf8', timeout: 10000 });
+    try { fs.unlinkSync(idFile); } catch (_) {}
+    return true;
+  },
+
   pidAlive(pid) {
     if (!pid) return false;
     try {

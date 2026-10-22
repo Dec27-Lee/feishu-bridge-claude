@@ -72,6 +72,61 @@ function splitText(text, size) {
   return chunks;
 }
 
+// 「你在终端里说」这一块。
+//
+// 短的就直接摆出来；长的用 collapsible_panel 折起来——飞书卡片 2.0 里
+// 唯一能做「点一下展开全文」的组件就是它（table 的分页、overflow 的按钮组
+// 都不是这个用途）。折叠后标题只留第一行摘要，点开看全文，不占手机屏幕。
+const SAID_INLINE_MAX = 180;
+// 卡片整体上限 30KB。用户可能一贴几千字，正文还要放 AI 的回复，
+// 所以折叠区也不是无上限——超过就截断并说明。
+const SAID_FULL_MAX = 3000;
+
+function quoteLines(text) {
+  // 每行前面加 │，手机上没有 blockquote 样式，靠这个做出引用块的观感
+  return text.split('\n').map((l) => `<font color='grey'>│ ${l}</font>`).join('\n');
+}
+
+function buildUserSaid(text) {
+  if (!text) return [];
+
+  // 折叠区里也放不下全部时截断并说明——悄悄截断比不显示更糟：
+  // 用户会以为那就是全部。
+  const clipped = text.length > SAID_FULL_MAX;
+  const shown = clipped
+    ? text.slice(0, SAID_FULL_MAX) + `\n…（原文共 ${text.length} 字，此处截断）`
+    : text;
+
+  const oneLine = text.replace(/\s+/g, ' ').trim();
+  const compactEnough = text.length <= SAID_INLINE_MAX && !text.includes('\n');
+  if (compactEnough) {
+    return [
+      { tag: 'hr' },
+      { tag: 'markdown', content: '💬 **你在终端里说**' },
+      { tag: 'markdown', content: quoteLines(shown) },
+    ];
+  }
+
+  // 长内容：标题用第一行前 40 字做摘要，展开后是原文
+  const head = (text.split('\n')[0] || oneLine).slice(0, 40);
+  const hint = text.length > SAID_INLINE_MAX ? `（共 ${text.length} 字）` : '';
+  return [
+    { tag: 'hr' },
+    {
+      tag: 'collapsible_panel',
+      expanded: false,
+      header: {
+        title: { tag: 'plain_text', content: `💬 你在终端里说：${head}…${hint}` },
+        width: 'fill',
+        icon_position: 'right',
+        icon_expanded_angle: 180,
+      },
+      vertical_spacing: '4px',
+      elements: [{ tag: 'markdown', content: quoteLines(shown) }],
+    },
+  ];
+}
+
 function buildCard({ name, cwd, body, index, total, continued, stats, userSaid }) {
   // 首条卡片标题直接取窗口名，飞书据此生成话题名（话题名 = 会话名）。
   // 状态一律用标题栏颜色表达，标题文字里不再放 emoji 或状态词。
@@ -92,16 +147,8 @@ function buildCard({ name, cwd, body, index, total, continued, stats, userSaid }
     if (stats) elements.push({ tag: 'markdown', content: `📦 ${stats}` });
 
     // 人在终端里敲的那句话。手机上看不到终端，没有它就不知道这轮在回答什么。
-    if (userSaid) {
-      const q = userSaid.length > 300 ? userSaid.slice(0, 300) + '…' : userSaid;
-      elements.push({ tag: 'hr' });
-      elements.push({ tag: 'markdown', content: '💬 **你在终端里说**' });
-      // 每行前面加 │，手机上没有 blockquote 样式，靠这个做出引用块的感觉
-      elements.push({
-        tag: 'markdown',
-        content: q.split('\n').map((l) => `<font color='grey'>│ ${l}</font>`).join('\n'),
-      });
-    }
+    // 长内容走折叠面板，点开看全文（见 buildUserSaid）。
+    if (userSaid) elements.push(...buildUserSaid(userSaid));
     elements.push({ tag: 'hr' });
   }
   elements.push({ tag: 'markdown', content: body });

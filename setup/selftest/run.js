@@ -48,12 +48,13 @@ function mkSandbox() {
     logs: path.join(dir, 'logs'),
     config: path.join(dir, 'config.json'),
     mock: path.join(dir, 'mock'),
+    tmp: path.join(dir, 'tmp'),
     claude: path.join(dir, 'claude'),
     socket: process.platform === 'win32'
       ? `\\\\.\\pipe\\feishu-selftest-${process.pid}`
       : path.join(dir, 'test.sock'),
   };
-  for (const d of [paths.data, paths.logs, paths.mock, paths.claude,
+  for (const d of [paths.data, paths.logs, paths.mock, paths.tmp, paths.claude,
     path.join(paths.claude, 'sessions'), path.join(paths.claude, 'projects')]) {
     fs.mkdirSync(d, { recursive: true });
   }
@@ -85,6 +86,11 @@ function env(p, extra) {
     // 关键：关掉真实采样器。否则它会每秒覆盖 data/presence.json，
     // 把用例注入的「人在电脑前 / 人不在」假数据冲掉，判定就不可控了。
     FEISHU_DISABLE_PRESENCE: '1',
+    // 开窗脚本不要落到真实的 %TEMP%：自测每跑一次会留一个 cc-launch-*.cmd，
+    // 攒下来就是用户 TEMP 里一堆垃圾。TEMP 指到沙箱，收尾一起删。
+    TEMP: p.tmp,
+    TMP: p.tmp,
+    TMPDIR: p.tmp,
     NODE_OPTIONS: `--require ${path.join(__dirname, 'mock-preload.js').replace(/\\/g, '/')}`,
     ...extra,
   };
@@ -297,6 +303,25 @@ async function main() {
   let mapping = '';
   try { mapping = fs.readFileSync(path.join(p.data, 'mapping.jsonl'), 'utf8'); } catch (_) {}
   check('话题已写入映射表', mapping.includes('omt_new1'), mapping ? '' : 'mapping.jsonl 不存在');
+
+  // 开窗这一步必须被沙箱拦下。它以前没拦：每跑一次自测，用户桌面上就真多一个
+  // Windows Terminal 窗口跑 claude，跑完也没人关——几次下来满屏终端。
+  // 认 mock 记下的那条 launch 调用，光看 .cmd 文件分不出「拦下了」还是「真跑了」。
+  check('开窗被沙箱拦下、没有真起终端',
+    readLines(path.join(p.mock, 'calls.jsonl')).some((c) => c.note === 'launch mocked'), '');
+  check('开窗脚本落在沙箱目录', fs.readdirSync(p.tmp).some((f) => /^cc-launch-/.test(f)),
+    fs.readdirSync(p.tmp).join(',') || '空');
+
+  // 非 Windows 平台开窗走 `bash launch-claude.sh`，上面的 cscript 拦截管不到，
+  // 所以要单独确认这条路拦得住——否则在 mac/Linux 上跑自测会真弹终端窗口。
+  check('mac/Linux 的开窗入口也认得出来',
+    (() => {
+      const src = fs.readFileSync(path.join(ROOT, 'setup', 'selftest', 'mock-preload.js'), 'utf8')
+        // 先剥注释，否则光凭注释里提到 launch-claude.sh 就会误判通过
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/(^|[^:])\/\/.*$/gm, '$1');
+      return /isNixLaunch\s*=/.test(src) && /launch-claude\.sh/.test(src);
+    })(), 'mock-preload 缺少 bash 开窗拦截');
 
   console.log('\n5. 已绑定话题里发言 → 投递到会话');
   // 先把一个假会话注册好，让桥接能找到它的管道
@@ -586,6 +611,19 @@ async function main() {
     const r2 = hooksCfg.mergeInto(r1.settings);
     check('重复安装是幂等的', r2.added.length === 0 && r2.removed.length === 0,
       `added=${r2.added.length} removed=${r2.removed.length}`);
+
+    // 命令形态按平台不同，两边都必须能跑：
+    //   Windows → cmd /c，不能带引号（否则整串当成一个程序名）
+    //   macOS/Linux → sh -c，必须带引号（否则路径里的空格会拆开参数）
+    const cmdsAll = ['SessionStart', 'PreToolUse', 'PermissionRequest', 'Stop', 'Notification']
+      .flatMap((e) => cmds(e));
+    const expected = hooksCfg.buildCommand(hooksCfg.NODE, 'SCRIPT', process.platform);
+    check('hook 命令形态与当前平台匹配',
+      cmdsAll.every((c) => c.includes(process.platform === 'win32' ? `${hooksCfg.NODE} ` : `"${hooksCfg.NODE}"`)),
+      `${process.platform}: ${expected}`);
+    check('hook 命令以 node 绝对路径开头',
+      cmdsAll.every((c) => c.startsWith(hooksCfg.NODE) || c.startsWith(`"${hooksCfg.NODE}"`)),
+      cmdsAll[0] || '');
   }
 
   console.log('\n9e. 上下文进度条');
@@ -647,6 +685,182 @@ async function main() {
       a('第一轮') + u('继续改') + a('第二轮')
       + u([{ type: 'tool_result', content: 'ok' }]) + a('还在改'), 'utf8');
     check('跳过工具回执找到人那句话', lastUserInput(tf) === '继续改', lastUserInput(tf));
+
+    // 反过来的真实场景：终端说过一句 → 接着这一轮是从飞书发起的。
+    // 卡片上不该出现那句终端输入（它不是这一轮的问题）。
+    // 曾经的 bug：识别到飞书来信后是 continue 继续往前翻，
+    // 于是把上一轮终端里的话当成本轮输入，飞书回复的卡片上顶着无关旧话。
+    fs.writeFileSync(tf,
+      a('第一轮') + u('终端里敲的那句话') + a('第一轮结束')
+      + u('Another Claude session sent a message:\n[来自用户本人 · 飞书]（下面这段…）\n\n飞书里问的'),
+      'utf8');
+    check('飞书发起的这一轮不回退到旧的终端输入', lastUserInput(tf) === null,
+      JSON.stringify(lastUserInput(tf)));
+
+    // 更早还有别的终端输入时，同样不能翻出来
+    fs.writeFileSync(tf,
+      a('a') + u('更早的一句話') + a('b') + u('中间那句') + a('c')
+      + u('Another Claude session sent a message:\n\n飞书里的问题'),
+      'utf8');
+    check('飞书发起时不往前翻任何终端输入', lastUserInput(tf) === null,
+      JSON.stringify(lastUserInput(tf)));
+  }
+
+  console.log('\n9g. 长的终端输入折起来而不是截断');
+  {
+    // 短的一行摆出来，长的用 collapsible_panel 折叠——飞书里唯一能
+    // 「点一下看全文」的组件。以前是直接截到 300 字，长输入等于丢了。
+    const tf = path.join(p.dir, 'transcript-long.jsonl');
+    const write = (text) => fs.writeFileSync(tf, JSON.stringify({
+      type: 'user', message: { role: 'user', content: text },
+    }) + '\n', 'utf8');
+
+    const outbox = path.join(p.mock, 'outbox.jsonl');
+    const send = (text) => {
+      write(text);
+      const before = readLines(outbox).length;
+      runHook(p, 'plugins/notify/hooks/notify.js', {
+        hook_event_name: 'Stop',
+        session_id: 'long-said-sess',
+        cwd: p.claude,
+        transcript_path: tf,
+        last_assistant_message: '收到。',
+      });
+      const lines = readLines(outbox);
+      return lines.length > before ? lines[lines.length - 1].card : null;
+    };
+
+    const shortCard = send('短的一句话');
+    const shortEls = (shortCard && shortCard.body && shortCard.body.elements) || [];
+    check('短输入直接展示，不折叠',
+      shortEls.some((e) => e.tag === 'markdown' && e.content.includes('短的一句话'))
+      && !shortEls.some((e) => e.tag === 'collapsible_panel'), '');
+
+    const LONG = '这是一段很长的终端输入，用来验证折叠面板。'.repeat(30);
+    const longCard = send(LONG);
+    const longEls = (longCard && longCard.body && longCard.body.elements) || [];
+    const panel = longEls.find((e) => e.tag === 'collapsible_panel');
+    check('长输入用折叠面板', !!panel, panel ? '' : '没找到 collapsible_panel');
+    check('折叠区里有完整原文',
+      !!(panel && JSON.stringify(panel).includes(LONG.slice(0, 80))), '');
+    check('默认是收起的', !!(panel && panel.expanded === false), '');
+
+    // 超过卡片上限时截断，但必须说明——悄悄截断比不显示更糟
+    const HUGE = '巨'.repeat(6000);
+    const hugeCard = send(HUGE);
+    const hugeOut = JSON.stringify(hugeCard);
+    check('超长输入截断并注明原文长度',
+      hugeOut.includes(`原文共 ${HUGE.length} 字`), '');
+    check('卡片不超过飞书 30KB 上限', hugeOut.length < 28000, `${hugeOut.length} 字节`);
+  }
+
+  console.log('\n9h. 飞书图片落盘');
+  {
+    // 真实事件里图片是 markdown 写法 `![Image](img_v3_xxx)`，
+    // 早期代码只认 `[Image: img_xxx]`——两种都对不上就等于「图片功能整条不通」，
+    // 而且失败方式是静默的：用户以为发了图，窗口只收到一串 img_ 字面量。
+    // 必须在子进程里跑：kernel/lib 在 require 时就把数据目录定死了，
+    // 本进程前面已经 require 过它（指向项目真实 data/），改环境变量也追不回来。
+    const sess = path.join(ROOT, 'plugins', 'core', 'src', 'session.js').replace(/\\/g, '/');
+    const r = spawnSync(process.execPath, ['-e', `
+      const s = require(${JSON.stringify(sess)});
+      const out = {
+        md: s.materializeImages('om_img1', '![Image](img_v3_aaa-111)\\n这张图有啥问题'),
+        legacy: s.materializeImages('om_img2', '[Image: img_x_222] 旧格式'),
+        two: s.materializeImages('om_img3', '![Image](img_a_1)\\n![Image](img_b_2)'),
+        plain: s.materializeImages('om_img4', '纯文字，没有图'),
+        // 纯图片消息的 content 是 JSON，跟带文字的 post 不是一个形状
+        pure: s.materializeImages('om_img5', '{"image_key":"img_pure_9"}'),
+      };
+      const d = new Date();
+      out.localDay = d.getFullYear() + String(d.getMonth() + 1).padStart(2, '0')
+        + String(d.getDate()).padStart(2, '0');
+      console.log(JSON.stringify(out));
+    `], { cwd: ROOT, encoding: 'utf8', env: env(p), timeout: 60000 });
+
+    let out = {};
+    try { out = JSON.parse((r.stdout || '').trim().split('\n').pop()); } catch (_) {}
+
+    check('markdown 图片标记被换成本地路径',
+      /\[图片\] .*om_img1_1\.png/.test(out.md || '') && !(out.md || '').includes('img_v3_aaa-111'),
+      (out.md || r.stderr || '').slice(0, 160));
+    check('旧的 [Image: xxx] 写法也认',
+      /\[图片\] .*om_img2_1\.png/.test(out.legacy || ''), (out.legacy || '').slice(0, 120));
+    check('一条消息里两张图各自落盘成不同文件',
+      /om_img3_1\.png/.test(out.two || '') && /om_img3_2\.png/.test(out.two || ''),
+      (out.two || '').slice(0, 160));
+    check('没有图片时正文原样返回', out.plain === '纯文字，没有图', String(out.plain));
+    // 纯图片消息的 content 是 {"image_key":"img_xxx"}，不带文字。
+    // 不认这个形状的话，用户在飞书里只发一张图 = 窗口收到一串 JSON。
+    check('纯图片消息（JSON content）也能落盘',
+      /\[图片\] .*om_img5_1\.png/.test(out.pure || '') && !(out.pure || '').includes('image_key'),
+      String(out.pure).slice(0, 160));
+
+    // 目录名按本地日期，不是 UTC。UTC+8 的早上 8 点前用 toISOString()
+    // 会落到前一天，配合同样按目录名判断的过期清理，等于早 8 小时被删。
+    check('图片按本地日期归档',
+      !!out.localDay && fs.existsSync(path.join(p.data, 'images', out.localDay)),
+      `期望目录 ${out.localDay}`);
+
+    // 过期清理：按目录名算天数，不按 mtime——老目录里刚存进一张图会把 mtime
+    // 刷新成「今天」，按 mtime 算等于「只要还在收图，旧图永远不删」。
+    const imgRoot = path.join(p.data, 'images');
+    const old = `${out.localDay.slice(0, 4) - 1}${out.localDay.slice(4)}`;  // 去年同一天
+    fs.mkdirSync(path.join(imgRoot, old), { recursive: true });
+    fs.writeFileSync(path.join(imgRoot, old, 'keep.png'), 'x');
+    fs.mkdirSync(path.join(imgRoot, 'not-a-date'), { recursive: true });
+    fs.writeFileSync(path.join(imgRoot, 'not-a-date', 'x'), 'x');
+    const clean = spawnSync(process.execPath, ['-e', `
+      const lib = require(${JSON.stringify(path.join(ROOT, 'kernel', 'lib.js').replace(/\\/g, '/'))});
+      console.log(JSON.stringify(lib.cleanup()));
+    `], { cwd: ROOT, encoding: 'utf8', env: env(p), timeout: 30000 });
+    let rep = {};
+    try { rep = JSON.parse((clean.stdout || '').trim().split('\n').pop()); } catch (_) {}
+    check('过期图片目录被清掉', rep.images === 1, JSON.stringify(rep));
+    check('过期的日期目录真的删了', !fs.existsSync(path.join(imgRoot, old)), old);
+    check('当天的图不删', fs.existsSync(path.join(imgRoot, out.localDay)), out.localDay);
+    check('不像日期目录的不碰', fs.existsSync(path.join(imgRoot, 'not-a-date', 'x')), '');
+  }
+
+  console.log('\n9i. 端到端：飞书发图 → 窗口收到本地路径');
+  {
+    // 上面 9h 单测的是函数本身，这里走完整链路：事件进来 → 下载 → 投递。
+    // 单测绿而链路红是常见情况（比如调用点没接上），所以两层都要有。
+    const f2 = await startFakeSession(p, 'sess_img');
+    const m4 = JSON.parse(fs.readFileSync(path.join(p.mock, 'messages.json'), 'utf8') || '{}');
+    m4.om_img_e2e = { thread_id: 'omt_img' };
+    fs.writeFileSync(path.join(p.mock, 'messages.json'), JSON.stringify(m4));
+    fs.appendFileSync(path.join(p.data, 'mapping.jsonl'), JSON.stringify({
+      feishuMessageId: 'omt_img', sessionId: 'sess_img', sessionName: 'selftest',
+      cwd: p.claude, createdAt: Date.now(), via: 'thread',
+    }) + '\n');
+
+    pushEvent(p, {
+      __event: 'im.message.receive_v1',
+      type: 'im.message.receive_v1',
+      message_id: 'om_img_e2e',
+      chat_type: 'group',
+      content: '![Image](img_v3_e2e-999)\n这张图里有什么',
+    });
+    await sleep(1500);
+    f2.server.close();
+
+    // 管道上第一条是 auth 握手，真正的消息在它后面
+    const msg = f2.got.find((g) => g && g.type !== 'auth') || {};
+    const body = String((msg.message && msg.message.content) || '');
+    check('窗口收到的正文带本地图片路径',
+      /\[图片\] .*om_img_e2e_1\.png/.test(body),
+      JSON.stringify(f2.got).slice(0, 400));
+    check('图片标记没有残留到窗口',
+      !body.includes('img_v3_e2e-999') && !body.includes('![Image]'), body.slice(0, 160));
+    check('图片文件真的落盘了',
+      (() => {
+        const dir = path.join(p.data, 'images');
+        try {
+          return fs.readdirSync(dir).some((d) =>
+            fs.existsSync(path.join(dir, d, 'om_img_e2e_1.png')));
+        } catch (_) { return false; }
+      })(), '');
   }
 
   console.log('\n10. 关停与残留锁接管');
