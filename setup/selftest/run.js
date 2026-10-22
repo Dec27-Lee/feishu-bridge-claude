@@ -275,8 +275,9 @@ async function main() {
     fake.got.length ? `auth=${!!fake.got[0].token}` : '没收到');
   // 正文只加一句轻量来源标记：系统那条英文声明无法关闭，
   // 我们不再写大段解释（会把模型带偏成「这是另一个 Claude 发的」）。
-  check('投递正文标注来自用户',
-    fake.got.some((g) => String(g.message && g.message.content || '').startsWith('[来自用户]')), '');
+  check('投递正文带用户信封',
+    fake.got.some((g) => String(g.message && g.message.content || '')
+      .startsWith('[来自用户本人 · 飞书]')), '');
   fake.server.close();
 
   console.log('\n6. 提问 hook：here 档立刻放行');
