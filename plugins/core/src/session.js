@@ -104,6 +104,20 @@ function resolveRefs(messageId) {
   return { replyTo: msgs[0].reply_to || null, threadId: msgs[0].thread_id || null };
 }
 
+// 消息所属话题的根消息 id。挂在话题里的卡片必须先回复根消息，
+// 回复一条子消息虽然也留在同一棵树里，但会在该子消息下另起一层，手机上看着乱。
+// +messages-mget 不返回 root_id，得走原始 API。只在「首次绑定话题」时调一次。
+function threadRootMessage(messageId) {
+  try {
+    const r = lib.larkSync(['api', 'GET',
+      `https://open.feishu.cn/open-apis/im/v1/messages/${messageId}`, '--as', 'bot']);
+    const it = ((r && r.data && r.data.items) || [])[0] || {};
+    return it.root_id || it.parent_id || messageId;
+  } catch (_) {
+    return messageId;
+  }
+}
+
 // 投递：命名管道 + auth 行 + JSON 信封
 function deliver(session, text) {
   return new Promise((resolve) => {
@@ -148,5 +162,5 @@ function materializeImages(messageId, content) {
 
 module.exports = {
   livePeer, refreshSession, autoRegister, rememberSession, recentSession,
-  resolveRefs, deliver, materializeImages, CLAUDE_SESSIONS_DIR,
+  resolveRefs, threadRootMessage, deliver, materializeImages, CLAUDE_SESSIONS_DIR,
 };

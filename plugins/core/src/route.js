@@ -154,6 +154,21 @@ async function handleEvent(ev) {
     // 把话题也登记进映射，话题内后续任何发言都能路由
     if (threadId) {
       lib.appendMapping({ ...rec, feishuMessageId: threadId, via: 'thread' });
+
+      // 这棵树就是该窗口的话题——必须落盘记下来。
+      // 漏记的后果：卡片（提问提醒、权限卡）在 data/threads 里找不到归属，
+      // 于是各自在群里另起一棵新话题；而 notify 也以为窗口还没有话题，
+      // 又开第三棵。用户看到的就是「答完题，回复跑到另一个话题里去了」。
+      // 典型触发场景：窗口是在终端里手动开的（没有走桥接开窗），
+      // 用户在某个话题里发了第一条消息——这就是绑定时机。
+      if (!lib.readThreadRoot(mapping.sessionId)) {
+        // rootMessageId 必须是话题根，不是用户刚发的那条：
+        // 只有回复根消息才会落进同一棵树，回复子消息飞书会当成新的一层。
+        lib.writeThreadRoot(mapping.sessionId, session.threadRootMessage(messageId), threadId, {
+          fromAiTitle: true, userPicked: true, via: 'first-thread-message',
+        });
+        lib.log('bridge', `把话题 ${threadId} 绑定到 ${mapping.sessionName} (${mapping.sessionId})`);
+      }
     }
   }
 }

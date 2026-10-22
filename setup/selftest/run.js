@@ -328,6 +328,17 @@ async function main() {
       .startsWith('[来自用户本人 · 飞书]')), '');
   fake.server.close();
 
+  // 话题必须在这一步就落盘。漏记的后果不只是「找不到归属」：
+  // 后续提问卡/提醒卡会自己另开一棵话题，notify 再开一棵，
+  // 用户看到的是「在 A 话题答完题，回复出现在 B 话题」。
+  {
+    const tf = path.join(p.data, 'threads', 'sess_selftest.json');
+    let tr = null;
+    try { tr = JSON.parse(fs.readFileSync(tf, 'utf8')); } catch (_) {}
+    check('首个话题消息把窗口绑定到话题', !!(tr && tr.threadId === 'omt_new1'),
+      tr ? `threadId=${tr.threadId}` : 'threads 无记录');
+  }
+
   console.log('\n6. 提问 hook：here 档立刻放行');
   writePresence(p, { idleSeconds: 5, locked: false });
   const qHere = runHook(p, 'plugins/ask/hooks/ask-question.js', {
@@ -517,6 +528,32 @@ async function main() {
     });
     const after = outbox(p).length;
     check('已有待答记录时不再推重复通知', after === before, `${before} -> ${after}`);
+  }
+
+  console.log('\n9c. 卡片自己开的话题要登记归属');
+  {
+    // 窗口是手动在终端里开的，从没从飞书发过消息 → data/threads 里没有它。
+    // 这时提问卡只能在群里自成新话题，但必须顺手把归属记下来，
+    // 否则 notify 随后也会认为「没话题」，再开一棵。
+    writePresence(p, { idleSeconds: 9999, locked: false });
+    const qdir = path.join(p.data, 'questions');
+    fs.mkdirSync(qdir, { recursive: true });
+    fs.writeFileSync(path.join(qdir, 'notopic-test.json'), JSON.stringify({
+      id: 'notopic-test', kind: 'question', sessionId: 'no-topic-sess', cwd: p.claude,
+      createdAt: Date.now(), presence: { level: 'away' },
+      questions: [{ question: 'Q?', options: [{ label: 'A' }] }],
+    }));
+
+    const before = outbox(p).length;
+    await sleep(2600);   // 等 bridge 那一轮 2 秒的扫描
+    const sent = outbox(p).slice(before);
+
+    let tr = null;
+    try {
+      tr = JSON.parse(fs.readFileSync(path.join(p.data, 'threads', 'no-topic-sess.json'), 'utf8'));
+    } catch (_) {}
+    check('卡片发到群里并登记为新话题',
+      sent.some((o) => o.kind === 'send') && !!(tr && tr.threadId), tr ? tr.threadId : '无归属记录');
   }
 
   console.log('\n10. 关停与残留锁接管');

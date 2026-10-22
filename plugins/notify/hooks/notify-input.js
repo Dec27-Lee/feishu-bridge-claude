@@ -138,6 +138,23 @@ if (my.threadMode !== false && saved && saved.rootMessageId) {
     '--chat-id', cfg.chatId, '--msg-type', 'interactive', '--content', JSON.stringify(card)]);
 }
 
+// 这条通知在群里自成一颗新话题——必须登记归属，否则同一个窗口的卡片、
+// 后续回复会各自开新的树，用户看到的就是话题漂移。
+// （与 core/src/qcards.js 的 sendQuestionCard 同一个不变式，见 ARCHITECTURE 8.3）
+if (res && res.ok && res.data && res.data.message_id && !(saved && saved.rootMessageId)) {
+  try {
+    const info = lib.larkSync(['api', 'GET',
+      `https://open.feishu.cn/open-apis/im/v1/messages/${res.data.message_id}`, '--as', 'bot']);
+    const item = ((info && info.data && info.data.items) || [])[0] || {};
+    if (item.thread_id) {
+      lib.writeThreadRoot(sessionId, res.data.message_id, item.thread_id, {
+        fromAiTitle: true, userPicked: true, via: 'notification',
+      });
+      lib.log('input', `把新话题 ${item.thread_id} 绑定到 ${String(sessionId).slice(0, 8)}（由通知开创）`);
+    }
+  } catch (e) { lib.log('error', `通知话题归属登记失败: ${e.message}`); }
+}
+
 if (res && res.ok && res.data && res.data.message_id) {
   lib.appendMapping({
     feishuMessageId: res.data.message_id,

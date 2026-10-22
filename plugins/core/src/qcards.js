@@ -304,7 +304,18 @@ function sendQuestionCard(rec) {
     // lark-cli 这里回的是 { chat_id, create_time, message_id }，字段名是下划线
     return { messageId: res.data.message_id, threadId: res.data.thread_id || null };
   }
-  return sendCardNewTopic(card);
+
+  // 这个窗口还没有话题（典型：在终端里手动开的窗口，还没从飞书发过消息）。
+  // 卡片会在群里自成一颗新话题——那就把它登记成该窗口的话题，
+  // 否则紧接着 notify 也认为「没有话题」，再开一棵，同一个窗口的消息散在两处。
+  const sent = sendCardNewTopic(card);
+  if (sent && sent.messageId && sent.threadId) {
+    lib.writeThreadRoot(rec.sessionId, sent.messageId, sent.threadId, {
+      fromAiTitle: true, userPicked: true, via: 'card',
+    });
+    lib.log('bridge', `把新话题 ${sent.threadId} 绑定到 ${rec.sessionId.slice(0, 8)}（由卡片开创）`);
+  }
+  return sent;
 }
 
 // 定期扫 data/questions：新提问推卡片（一个提问只推一次）
