@@ -128,7 +128,9 @@ if (cfg) {
     const p = require('../kernel/presence').readPresence();
     add('presence', !!p, '在场采样可用',
       p ? `空闲 ${p.idleSeconds}s，锁屏=${p.locked}` : '读不到采样（采样器没起来或未编译）',
-      p ? '' : 'node setup/install.js --build；或忽略（功能会退化为「一律推卡片」）');
+      p ? '' : (process.platform === 'win32'
+        ? 'node setup/install.js --build；或忽略（功能会退化为「一律推卡片」）'
+        : '先启动 bridge 让它拉起采样器；或忽略（功能会退化为「一律推卡片」）'));
   } else {
     add('presence', true, '在场采样可用（本平台未实现）',
       `${platform.name} 上会一律推卡片，功能不缺失`, '');
@@ -149,8 +151,10 @@ if (cfg) {
     for (const entries of Object.values(settings.hooks || {})) {
       for (const e of entries) {
         for (const h of (e.hooks || [])) {
-          const m = String(h.command || '').match(/node\s+(\S+\.js)/);
-          if (m && !fs.existsSync(m[1])) missing.push(m[1]);
+          // 用 hooks-config 的解析器：command 里 node 的绝对路径本身含 "node"，
+          // 拿 /node\s+(\.js)/ 去匹配会漏掉这些条目，校验就静默通过了。
+          const script = hooksCfg.scriptPathFromCommand(h && h.command);
+          if (script && !fs.existsSync(script)) missing.push(script);
         }
       }
     }

@@ -157,12 +157,14 @@ function hooksStale() {
   const cmds = [];
   for (const entries of Object.values(settings.hooks || {})) {
     for (const e of entries) for (const h of (e.hooks || [])) {
-      if (String(h.command || '').includes('feishu')) cmds.push(h.command);
+      if (hooksCfg.isOwnCommand(h && h.command)) cmds.push(h.command);
     }
   }
+  // 解析交给 hooks-config：command 里 node 的绝对路径本身含 "node"，
+  // 用 /node\s+(.+\.js)/ 会匹配不上，这项检查就静默失效了。
   const missing = cmds.filter((c) => {
-    const m = c.match(/node\s+(.+\.js)/);
-    return m && !fs.existsSync(m[1].trim());
+    const script = hooksCfg.scriptPathFromCommand(c);
+    return script && !fs.existsSync(script);
   });
   return { installed: true, stale: missing.length > 0, missing };
 }

@@ -225,9 +225,11 @@ chunks.forEach((chunk, i) => {
     lib.log('error', `第 ${i + 1}/${chunks.length} 段发送失败 ${name}: ${JSON.stringify(res).slice(0, 200)}`);
   }
 
-  // 同一用户 5 QPS 限流，分段之间稍作停顿
+  // 同一用户 5 QPS 限流，分段之间稍作停顿（约 1 秒）
   if (i < chunks.length - 1) {
-    try { spawnSync('cmd', ['/c', 'ping', '-n', '2', '127.0.0.1'], { windowsHide: true, timeout: 3000 }); } catch (_) {}
+    try {
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1000);
+    } catch (_) {}
   }
 });
 

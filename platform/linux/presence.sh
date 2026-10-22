@@ -44,14 +44,17 @@ sample() {
   fi
 
   # 会话锁屏状态。systemd-logind 是主流发行版默认的。
+  #
+  # 不用 `--value`：那是 systemd 230 之后才有的参数，老发行版会直接报错，
+  # 而报错被 2>/dev/null 吞掉后 locked 永远是 false——锁屏了还当人在。改成
+  # 解析 `Key=Value` 的形式，兼容面更宽。
   if have loginctl; then
-    local sid
-    sid=$(loginctl show-user "$(id -u)" -p Display --value 2>/dev/null || echo "")
+    local sid locked_raw
+    sid=$(loginctl show-user "$(id -u)" -p Display 2>/dev/null | cut -d= -f2)
     [ -z "$sid" ] && sid="${XDG_SESSION_ID:-}"
     if [ -n "$sid" ]; then
-      case "$(loginctl show-session "$sid" -p LockedHint --value 2>/dev/null || echo '')" in
-        yes) locked=true ;;
-      esac
+      locked_raw=$(loginctl show-session "$sid" -p LockedHint 2>/dev/null | cut -d= -f2)
+      [ "$locked_raw" = "yes" ] && locked=true
     fi
   fi
 

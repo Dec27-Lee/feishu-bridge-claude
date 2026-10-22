@@ -12,6 +12,7 @@ module.exports = {
   presenceExe: null,
 
   startPresence() { return false; },
+  presencePid() { return null; },
   presenceRunning() { return false; },
   stopPresence() {},
   stopAllPresence() { return []; },

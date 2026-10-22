@@ -149,13 +149,19 @@ node setup/install.js --hooks               # 确认后真跑
 它会做两件事：
 
 1. 往 `~/.claude/settings.json` 的 `hooks` 里加 5 个事件（SessionStart / PreToolUse /
-   PermissionRequest / Stop / Notification）。**只增不删**，你原有的 hook 不受影响。
+   PermissionRequest / Stop / Notification）。**只动本项目自己的那几条**，你原有的
+   hook（比如 codegraph）一条不碰。
 2. 确保 `crossSessionInbound: "accept"`。没有它，窗口会拒收桥接投递的消息，
    **而且毫无报错**——排查这类问题时先看这一项。
 
 会先备份成 `settings.json.bak-<时间戳>`。
 
-**验证**：`check.js` 的 `hooks` 项变 ✓。
+> **hook 里写的是 node 的绝对路径**，不是裸 `node`。因为 hook 由 Claude Code 在
+> 非交互 shell 里执行，那个环境的 PATH 常常不含 nvm / volta / fnm 的目录
+> （macOS 上尤其常见），裸 `node` 会 command not found，表现是所有 hook 静默失效。
+> 代价：**换 Node 版本后要重装一次 hooks**，`check.js` 的 `hooks-node` 项会提醒你。
+
+**验证**：`check.js` 的 `hooks` 和 `hooks-node` 两项都是 ✓。
 
 ### 步骤 5 · cc-switch（用的人必须做）
 
@@ -178,19 +184,28 @@ node setup/install.js --cc-switch              # 逐个补
 > `setup/hooks-config.js` 里 `HOOKS` 对象的内容合并进去。
 > **必须提醒用户：改的时候 cc-switch 不能正在切换服务商。**
 
-### 步骤 6 · 编译在场采样器（可选，只影响 Windows）
+### 步骤 6 · 在场采样器（可选）
 
 ```bash
 node setup/install.js --build
 ```
 
-用 Windows 自带的 `csc.exe`（.NET Framework）编译 `platform/win32/presence.cs`
-成同目录的 `presence.exe`。
+| 平台 | 这一步做什么 |
+| --- | --- |
+| Windows | 用自带的 `csc.exe`（.NET Framework）把 `presence.cs` 编译成 `presence.exe` |
+| macOS / Linux | 不用编译，`presence.sh` 是随仓库分发的 shell 脚本；这一步只做检查 |
 
-**不编译也能用**：没有采样器时 `kernel/wait.js` 会自动退化成
+**不装也能用**：没有采样器时 `kernel/wait.js` 会自动退化成
 「一律推卡片、等 30 分钟」，只是手机上多收几张卡。
 
-**验证**：`platform/win32/presence.exe` 存在；启动后 `data/presence.json` 每秒刷新。
+**验证**：`node setup/check.js` 里「在场采样器」一项是 ✓。
+它的判断方式是两个平台各取所长——Windows 看 exe 在不在，
+macOS/Linux 真跑一次 `presence.sh --once` 看能不能采到数。
+
+> Linux 额外要求：空闲秒数依赖 `xprintidle`（`apt install x11-utils` 或
+> `dnf install xorg-x11-utils`）。**Wayland 下没有统一接口**，采不到就如实返回
+> `idleSeconds: -1`，判定退到「一律推卡片」——不编数据，也不阻塞。
+> macOS 用 `ioreg` 读 `HIDIdleTime`，系统自带，无需额外安装。
 
 ### 步骤 7 · 启动
 
@@ -224,6 +239,12 @@ node setup/install.js --autostart
 ```
 
 Windows 会在启动文件夹放一个快捷方式指向 `watch-bridge.vbs`（崩溃自动重启）。
+macOS 写 `~/Library/LaunchAgents/com.feishu.bridge.claude.plist`（launchd KeepAlive）。
+Linux 写 `~/.config/systemd/user/feishu-bridge.service`（systemd --user，`Restart=on-failure`）。
+
+> 三个平台的「崩溃重拉」都由自启机制本身提供。Windows 的 `watch-bridge.vbs`
+> 是显式的循环守护脚本；launchd/systemd 那边是 KeepAlive / Restart 两个选项。
+> 所以**没装自启时进程挂了不会自己起来**，这也是为什么搬家脚本会兜底直接起一个。
 
 ---
 
@@ -233,21 +254,23 @@ Windows 会在启动文件夹放一个快捷方式指向 `watch-bridge.vbs`（�
 症状是「看着还在跑，但改代码没反应」——最难查的一类问题。
 
 ```bash
-node setup/move.js D:/tools/feishu-bridge-claude            # 演练，只说要做什么
-node setup/move.js D:/tools/feishu-bridge-claude --yes      # 真的搬
-node setup/move.js D:/tools/feishu-bridge-claude --yes --delete-old   # 搬完删旧目录
+node setup/move.js /Users/you/apps/feishu-bridge-claude          # 演练，只说要做什么
+node setup/move.js /Users/you/apps/feishu-bridge-claude --yes    # 真的搬
+node setup/move.js /Users/you/apps/feishu-bridge-claude --yes --delete-old   # 搬完删旧目录
 ```
 
 它按「先停 → 再复制 → 改指向 → 最后才删旧」的顺序做：
 
-1. **停进程**：bridge、在场采样器，**以及 `watch-bridge.vbs`**。
-   不杀守护进程的话，它 5 秒后会把旧位置的代码重新拉起来。
+1. **停进程**：bridge、在场采样器，**以及守护进程**。
+   Windows 上是 `watch-bridge.vbs`；macOS/Linux 上由 launchd/systemd 拉起，
+   所以第 2 步先卸自启。不这么做的话，5 秒后旧位置的代码又会被拉起来。
 2. **卸旧自启**：否则每次开机都拉起旧目录。
 3. **复制**：旧目录在复制期间始终完整，任何一步失败都能退回去。
 4. **改指向**：`install.js --hooks` 会摘掉本项目指向旧位置的 hook 再加入新的
    （判据是脚本名，不看目录，所以搬过几次都能收拾干净）；
    `--cc-switch` 补每个服务商；`--autostart` 重建自启项。
-5. **在新位置启动 + `verify.js` 体检**。
+5. **在新位置启动 + `verify.js` 体检**。没装自启时直接 detached 起一个，
+   不依赖服务管理器。
 6. 加 `--delete-old` 时，**先确认新位置的 bridge 真的在跑**才删旧目录。
 
 **给用户的话**：搬家前先关掉正在跑飞书桥接的窗口，搬完 `cd` 到新目录再继续。
@@ -285,7 +308,7 @@ node setup/update.js            # 拉取 → 迁移配置 → 检查 hooks 路�
 | 换目录 | `node setup/move.js <新目录> [--yes] [--delete-old]` |
 | 自测（不碰真实配置） | `node setup/selftest/run.js` |
 | 看全部可配项 | `node kernel/config.js --dump` |
-| 重启 | `Stop-Process -Id (Get-Content data/bridge.pid) -Force`（自启会拉回来） |
+| 重启 | Windows：`Stop-Process -Id (Get-Content data/bridge.pid) -Force`<br>macOS / Linux：`kill $(cat data/bridge.pid)`<br>（装了自启会被自动拉回来） |
 | 看日志 | `logs/bridge.log` 路由；`logs/<插件id>.log` 各插件；`logs/error.log` 异常 |
 | 看在场状态 | `data/presence.json`——`idleSeconds` 空闲秒数、`locked` 是否锁屏 |
 | 改配置 | 编辑 `config.json` → 重启 |
@@ -314,16 +337,20 @@ node setup/update.js            # 拉取 → 迁移配置 → 检查 hooks 路�
 | 窗口收不到消息，且日志无异常 | `crossSessionInbound` | 必须是 `"accept"`。这是静默失败，最坑 |
 | 换了 cc-switch 服务商后功能全丢 | 该服务商是否带 hooks | `node setup/install.js --cc-switch` |
 | 人在电脑前却收到作答卡 | `data/presence.json` 的 `idleSeconds` | 3 分钟没碰键鼠会被判定不在，碰一下即可；或点「让终端问我」 |
-| 锁屏了终端还弹窗 | `data/presence.json` 的 `fgProc` | 锁屏时应为 `LockApp`；`config.json` 里 `presenceAware:false` 可临时退回 |
+| 锁屏了终端还弹窗 | `data/presence.json` 的 `locked` | Windows 看 `fgProc` 应为 `LockApp`；macOS 看 `locked` 是否为 true；Linux 看 `loginctl` 能不能报 `LockedHint`。`config.json` 里 `presenceAware:false` 可临时退回 |
 | 新窗口停在 `Accessing workspace` | 目录是否已信任 | 桥接会自动预置信任；仍卡住就在电脑上按一次回车 |
 | 提问卡片一直不出现 | `data/bridge.pid` 里的进程是否活着 | `node setup/check.js` 看各项 |
 | 权限确认卡片不出现 | 是否命中 `deny` 规则 / MCP 要求人工交互 / `dontAsk` 模式 | 这几类问也放不过，只能在终端确认 |
+| 所有 hook 静默失效、无报错 | `check.js` 的 `hooks-node` | hook 里写的是 node 绝对路径，换 Node 版本后会指向不存在的文件。`node setup/install.js --hooks` 重装 |
+| macOS/Linux 新窗口里 `claude: command not found` | 启动器的 PATH | 从 launchd/systemd 起的进程只有最小 PATH。`launch-claude.sh` 已补常见目录；claude 若装在别处，加到脚本的候选列表里 |
+| Linux 采不到空闲时长（总是推卡片） | `xprintidle` 是否安装 / 是否 Wayland | `apt install x11-utils`；Wayland 无统一接口，只能接受降级 |
+| macOS 上所有提问都推手机、终端不弹窗 | `data/presence.json` 的 `locked` 是否为 true | 若恒为 true 说明锁屏探测误判。检查 `ioreg -n Root -d1 -a | grep -A1 CGSSessionScreenIsLocked` |
 
 **排查顺序永远是：`check.js` → `logs/error.log` → `logs/event.log`。**
 不要一上来就读代码。
 
 改完代码想确认没跑偏，跑 `node setup/selftest/run.js`：它在临时目录里起一整套沙箱
-（伪造的 lark-cli、伪造的会话管道），把 25 条主链路跑一遍，不读也不写你任何真实配置。
+（伪造的 lark-cli、伪造的会话管道），把 39 条主链路跑一遍，不读也不写你任何真实配置。
 
 ---
 

@@ -35,6 +35,13 @@ if [ -z "$MODE" ]; then
   exit 2
 fi
 
+# 探测一次「有没有 PyObjC」，别放到 sample() 里——
+# 那是每秒一次的热路径，每次起一个 python3 进程光启动就要几十毫秒。
+HAVE_QUARTZ=false
+if /usr/bin/python3 -c 'import Quartz' >/dev/null 2>&1; then
+  HAVE_QUARTZ=true
+fi
+
 # 每个 sample 内部只用一次外部命令，避免每秒 spawn 十几个进程
 sample() {
   local idle locked ts
@@ -44,25 +51,31 @@ sample() {
     | awk '/HIDIdleTime/ {printf "%d", $NF / 1000000000; exit}')
   [ -z "$idle" ] && idle=-1
 
-  # 锁屏判定。PyObjC 在系统自带的 python3 里通常可用；
-  # 不可用时退回「登录界面进程是否在前台」这种粗判。
+  # 锁屏判定。PyObjC 在系统自带的 python3 里不一定有（多数 Mac 没有），
+  # 拿不到时退回读 ioreg 的 IOConsoleUsers。
+  #
+  # 注意：必须核对**值**，不能只 grep 键名。ioreg -a 输出的是 plist，
+  # `<key>CGSSessionScreenIsLocked</key>` 这一行在没锁屏时也存在（后面跟 <false/>）。
+  # 只 grep 键名会让「锁屏」恒为 true，后果是所有提问都推手机、终端永远不弹窗。
   locked=false
-  if /usr/bin/python3 -c 'import Quartz' >/dev/null 2>&1; then
+  if [ "$HAVE_QUARTZ" = true ]; then
     locked=$(/usr/bin/python3 -c '
 import Quartz
 d = Quartz.CGSessionCopyCurrentDictionary() or {}
 print("true" if d.get("CGSSessionScreenIsLocked", 0) else "false")
 ' 2>/dev/null || echo false)
   else
-    # 没 PyObjC：锁屏时 screen 会被加锁，用 ioreg 的 Root 节点能读到
-    if ioreg -n Root -d1 -a 2>/dev/null | grep -q 'CGSSessionScreenIsLocked'; then
+    if ioreg -n Root -d1 -a 2>/dev/null \
+      | tr -d '\n' \
+      | grep -q '<key>CGSSessionScreenIsLocked</key>[[:space:]]*<true/>'; then
       locked=true
     fi
   fi
 
-  ts=$(node -e 'process.stdout.write(String(Date.now()))' 2>/dev/null \
-    || python3 -c 'import time;print(int(time.time()*1000))' 2>/dev/null \
-    || echo $(($(date +%s) * 1000)))
+  # 时间戳只要毫秒级够用。macOS 的 date 不支持 %3N，之前用 node 取——
+  # 但这是每秒一次的热路径，起一个 node 进程约 30-50ms，白烧 CPU。
+  # 秒级精度完全够（没人读这个字段做精确计算；新鲜度判定用的是文件 mtime）。
+  ts=$(( $(date +%s) * 1000 ))
 
   printf '{"ok":true,"ts":%s,"idleSeconds":%s,"locked":%s,"fgProc":"","windows":[]}' \
     "$ts" "$idle" "$locked"

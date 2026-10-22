@@ -49,7 +49,8 @@
 ├──────────────────────────────────────────────────────────┤
 │  platform/       与操作系统相关的一切                     │
 │    win32/        VBS 开窗、presence.exe、tasklist         │
-│    darwin/       osascript 开窗、launchd（待实现）        │
+│    darwin/       osascript 开窗、presence.sh、launchd     │
+│    linux/        终端探测开窗、presence.sh、systemd       │
 └──────────────────────────────────────────────────────────┘
 ```
 
@@ -217,15 +218,20 @@ ctx.bus.on('question.created', ({ record }) => { /* ... */ }, ctx.id);
 
 ## 六、平台适配层
 
-`platform/` 只暴露 4 个能力，全部是「换系统就必须重写」的东西：
+`platform/` 只暴露 8 个能力，全部是「换系统就必须重写」的东西：
 
 | 能力 | Windows | macOS | Linux |
 | --- | --- | --- | --- |
 | `spawnWindow(opts)` | `cscript launch-claude.vbs` → `wt.exe` | `osascript` → Terminal/iTerm | 试 gnome-terminal / konsole / xfce4-terminal / xterm |
 | `pidAlive(pid)` | `tasklist` 名称校验 | `ps -p comm=` | `process.kill` + `ps` 名称校验 |
-| `startPresence` | `presence.exe --loop`（C# 编译） | `presence.sh --loop`（ioreg + CGSession） | `presence.sh --loop`（xprintidle + loginctl） |
+| `startPresence` / `presenceRunning` / `presencePid` / `stopPresence` | `presence.exe --loop`（C# 编译） | `presence.sh --loop`（ioreg + CGSession） | `presence.sh --loop`（xprintidle + loginctl） |
+| `stopAllPresence()` | 按 `ExecutablePath` 收掉本目录的 presence.exe | `ps` 匹配 `presence.sh` 路径 | 同 macOS |
 | 自启方式 | 启动文件夹 + VBS | launchd（LaunchAgents） | systemd --user |
 | 实现文件 | `presence.cs` / 3 个 `.vbs` | `presence.sh` / `launch-claude.sh` / `*.sh` | 同 macOS 结构 |
+
+`stopAllPresence()` 存在的原因：采样器是 detached 启动的，bridge 被强杀或换掉后
+它会继续活着并每秒写 `data/presence.json`。只杀 bridge 自己那一份子进程不够——
+换目录（`setup/move.js`）时必须把旧位置的孤儿也收掉，否则它一直往旧路径写。
 
 **三个平台各自是一个自洽的子目录**，互不引用；共同逻辑一律在 `kernel/` 与 `plugins/`。
 给一个新平台做适配 = 在那一个目录里实现上面这组接口 + 在 `platform/index.js` 加一个分支，
@@ -237,7 +243,19 @@ Linux 上有些能力拿不到（Wayland 没统一空闲接口、锁屏各家不
 **`supportsPresence === false` 时功能不缺失**：`kernel/wait.js` 会退化成
 「一律推卡片、按 awayWaitSeconds 等」，也就是没有在场探测的老行为。
 
-这就是为什么 macOS 可以晚做——主体功能一行平台代码都不需要。
+### 6.1 hook 里的 node 用绝对路径
+
+`setup/hooks-config.js` 写进 settings 的 command 形如
+`"<node 绝对路径>" "<脚本绝对路径>"`，**不用裸 `node`**。
+
+原因：hook 由 Claude Code 在非交互 shell 里起，那个环境拿到的 PATH 常常不含
+nvm / volta / fnm / asdf 的 shim 目录——macOS 上用 nvm 装 node 的人极多。裸 `node`
+会直接 command not found，表现是**所有 hook 静默失效**（没有报错弹窗，只是功能不动）。
+
+代价是换 node 版本后路径失效，所以 `check.js` 有 `hooks-node` 一项会核对；
+`verify.js` / `update.js` 解析脚本路径时也走 `hooks-config.scriptPathFromCommand()`，
+不要自己写 `/node\s+(.+\.js)/`——node 的绝对路径本身含 `node`，那个正则匹配不上，
+校验会静默通过。
 
 ## 七、在场判定（最容易误解的一处）
 
@@ -396,7 +414,7 @@ module.exports = {
 | --- | --- | --- |
 | `plugins/core/index.js` | 逐个模块已拆到 `src/`，但还有若干函数间隐式耦合 | 下次改动 route 时顺手 |
 | `ctx.bus` | 总线已实现且能派发，但现有四个插件之间还没有真正用到它（都是内聚功能，不需要互相通信） | 第一个需要跨插件协作的功能出现时 |
-| `kernel/presence.js` | 窗口枚举对判定无用，但仍在采集 | 做 macOS 版时一起删 |
-| `platform/darwin` | 只有占位实现 | 有 mac 用户时 |
-| `setup/` | 只有 check/install/selftest，尚无 doctor（运行期排障） | 下一轮 |
+| `kernel/presence.js` | 窗口枚举对判定无用（`windows` 字段谁都不读），但仍在采集 | 下次改在场判定时一起删 |
+| macOS / Linux 的 `presence.sh` | 都是单文件 shell，没有像 Windows 那样编译过的采样器；`ioreg` 每秒被调一次，实测开销可接受但不算低 | 有性能反馈时改成常驻进程（Windows 的 presence.exe 模式） |
+| `setup/` | 有 check/install/verify/update/move/selftest，尚无 doctor（运行期交互式排障） | 下一轮 |
 | 配置页 | schema 已可机器读（`--dump`），但没有前端 | 有人明确要图形界面时；届时只写一个读 `--dump` 的单页，**不需要动后端** |

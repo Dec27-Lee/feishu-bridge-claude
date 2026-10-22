@@ -198,14 +198,32 @@ function startAt(dst) {
         cwd: dst, detached: true, stdio: 'ignore', windowsHide: true,
       });
       c.unref();
-    } else if (process.platform === 'darwin') {
+      say('  已发出启动命令');
+      return;
+    }
+    if (process.platform === 'darwin') {
       spawnSync('launchctl', ['start', 'com.feishu.bridge.claude'], { timeout: 30000 });
     } else {
       spawnSync('systemctl', ['--user', 'start', 'feishu-bridge.service'], { timeout: 30000 });
     }
-    say('  已发出启动命令');
+    say('  已通过服务管理器启动');
   } catch (e) {
-    say(`  ! 启动失败：${e.message}（手动跑 node kernel/index.js）`);
+    say(`  ! 启动失败：${e.message}`);
+  }
+}
+
+// 服务管理器没装（用户跳过了 --autostart）时兜底：直接 detached 起一个。
+// 不兜底的话，搬家后 bridge 不会自己起来，用户看到的是「搬完就哑了」。
+function startBare(dst) {
+  say('  服务管理器没拉起，改为直接启动：');
+  try {
+    const c = spawn(process.execPath, [path.join(dst, 'kernel', 'index.js')], {
+      cwd: dst, detached: true, stdio: 'ignore', windowsHide: true,
+    });
+    c.unref();
+    say(`  已启动 ${process.execPath}`);
+  } catch (e) {
+    say(`  ! 直接启动也失败：${e.message}（手动跑 node kernel/index.js）`);
   }
 }
 
@@ -276,7 +294,13 @@ function main() {
     say('  将启动新位置的 bridge 并等待 pid 落盘');
   } else {
     startAt(dst);
-    const pid = waitPid(dst);
+    let pid = waitPid(dst);
+    if (!pid) {
+      // 没装自启（用户跳过了 --autostart）时服务管理器里没有这个服务，
+      // 启动命令会静默失败。这里兜底直接起一个，别让搬家结果变成「哑了」。
+      startBare(dst);
+      pid = waitPid(dst);
+    }
     if (!pid) {
       say('  ! 15 秒内没等到 bridge 起来');
       say(`    手动排查：cd ${dst} && node kernel/index.js`);

@@ -22,6 +22,15 @@ if [ -z "$NODE" ]; then
   exit 1
 fi
 
+# 没有 launchctl 就不是 macOS（比如在 Linux 上误跑了这一份）。
+# 先拦下来说明清楚，别把 plist 写进去再报 command not found——
+# 那样会留下一个看起来装了、其实永远不会生效的自启项。
+if ! command -v launchctl >/dev/null 2>&1; then
+  echo "这台机器没有 launchctl，不是 macOS。" >&2
+  echo "Linux 请用 platform/linux/install-autostart.sh；Windows 请用 setup/install.js --autostart" >&2
+  exit 1
+fi
+
 mkdir -p "$HOME/Library/LaunchAgents" "$ROOT/logs"
 
 cat > "$PLIST" <<EOF

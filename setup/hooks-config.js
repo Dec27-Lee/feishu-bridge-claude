@@ -18,10 +18,19 @@ function p(rel) {
   return path.join(ROOT, rel).split(path.sep).join('/');
 }
 
-const NODE = 'node';
+// 用**当前这个 node 的绝对路径**，不用裸 `node`。
+//
+// 原因：hook 由 Claude Code 在非交互 shell 里起，那个环境拿到的 PATH 往往
+// 不包含 nvm / volta / fnm / asdf 这些东西——macOS 上用 nvm 装 node 的人极多，
+// 裸 `node` 会直接报 command not found，表现是「所有 hook 静默失效」。
+// 装的时候我们已经运行在能用的 node 上，把它的绝对路径写死最稳。
+//
+// 代价：升级/换 node 版本后路径会变，需要重跑 `node setup/install.js --hooks`。
+// 这在 check.js 里被显式检查（hooks-node 项），不会悄无声息地坏掉。
+const NODE = process.execPath.split(path.sep).join('/');
 
 function hook(event, script, matcher, timeout) {
-  const h = { type: 'command', command: `${NODE} ${p(script)}` };
+  const h = { type: 'command', command: `"${NODE}" "${p(script)}"` };
   if (timeout) h.timeout = timeout;
   return matcher ? { matcher, hooks: [h] } : { hooks: [h] };
 }
@@ -43,15 +52,32 @@ const HOOKS = {
   ],
 };
 
-// 本项目的 hook 脚本（相对项目根）。判据是**相对路径**而不是绝对路径：
-// 项目被移动过之后，旧记录的绝对路径已经指向不存在的文件，
+// 本项目的 hook 脚本（相对项目根）。判据是**脚本名**而不是完整路径：
+// 项目被移动过之后，旧记录里的绝对路径已经指向不存在的文件，
 // 但「这条 hook 是谁装的」这个问题，只能靠脚本名回答。
-const OWN_SCRIPTS = Object.values(HOOKS).map((entries) => entries[0].hooks[0].command
-  .slice(NODE.length + 1).replace(/^.*?(?=plugins\/)/, ''));
+const OWN_SCRIPTS = [
+  'plugins/core/session-start.js',
+  'plugins/ask/hooks/ask-question.js',
+  'plugins/permission/hooks/permission-request.js',
+  'plugins/notify/hooks/notify.js',
+  'plugins/notify/hooks/notify-input.js',
+];
 
 function isOwnCommand(cmd) {
   const c = String(cmd || '').replace(/\\/g, '/');
-  return OWN_SCRIPTS.some((s) => c.endsWith(s) || c.includes(s));
+  return OWN_SCRIPTS.some((s) => c.includes(s));
+}
+
+// 从一条 hook command 里取出被执行的 .js 脚本路径。
+// command 的形状是 `"<node>" "<script>"`（带引号），也可能是老版本的
+// `node <script>`。不要用 /node\s+(...)/ 去匹配——node 的绝对路径里
+// 本身就含 node（node.exe / nodejs），那个正则匹配不上，会让路径校验静默失效。
+function scriptPathFromCommand(cmd) {
+  const s = String(cmd || '');
+  const quoted = [...s.matchAll(/"([^"]+\.js)"/g)].map((m) => m[1]);
+  if (quoted.length) return quoted[quoted.length - 1];
+  const bare = s.match(/(?:^|\s)(\S+\.js)(?:\s|$)/);
+  return bare ? bare[1] : null;
 }
 
 // 摘掉本项目「指向别处」的 hook——旧位置、已失效路径。
@@ -129,6 +155,7 @@ function staleEntries(settings) {
 }
 
 module.exports = {
-  HOOKS, ROOT, mergeInto, installed, stripOwn, staleEntries, isOwnCommand, OWN_SCRIPTS,
+  HOOKS, ROOT, mergeInto, installed, stripOwn, staleEntries, isOwnCommand,
+  scriptPathFromCommand, OWN_SCRIPTS, NODE,
   paths: { ask: p('plugins/ask/hooks/ask-question.js') },
 };

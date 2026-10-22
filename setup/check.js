@@ -95,6 +95,16 @@ add('required', 'hooks', hookOk,
   'Claude Code hooks 已安装', hookOk ? '5 个事件已注册' : '缺少本项目的 hook',
   'node setup/install.js   （会先展示将写入的 diff 再让你确认）');
 
+// 装是装了，但 node 的绝对路径可能已经失效（换了 Node 版本、用 nvm 切了版本）。
+// 这类失败是静默的：hook 报 command not found，界面上一片安静。
+{
+  const nodePath = hooksCfg.NODE;
+  const ok = fs.existsSync(nodePath);
+  add('required', 'hooks-node', ok,
+    'hooks 用的 node 还在', ok ? nodePath : `${nodePath} 不存在`,
+    ok ? '' : '换过 Node 版本。重装一次让 hooks 改指到当前 node：node setup/install.js --hooks');
+}
+
 // cc-switch：切换服务商会用库里的 settings_config 整体覆盖 settings.json，
 // 所以每个服务商的配置里都必须带同一份 hooks，否则一切换就失效。
 const ccSwitchDir = path.join(home, '.cc-switch');
@@ -142,8 +152,31 @@ if (platform) {
       '在场采样器已编译', fs.existsSync(exe) ? exe : '未编译',
       'node setup/install.js --build   （需要 .NET Framework 的 csc，Windows 自带）');
   } else {
-    add('optional', 'presence', false,
-      '在场探测', `${platform.name} 暂未实现，会一律推卡片`, '见 docs/ARCHITECTURE.md 第六节');
+    // macOS / Linux 的采样器是随仓库分发的 shell 脚本，不需要编译。
+    // 但脚本能不能真采到数是另一回事（Linux 要 xprintidle、Wayland 下拿不到），
+    // 所以这里真跑一次 --once 看输出，而不是只看文件在不在。
+    const sh = path.join(ROOT, 'platform', platform.name, 'presence.sh');
+    if (!fs.existsSync(sh)) {
+      add('optional', 'presence', false, '在场采样器', `缺少 ${sh}`, '重新拉取仓库');
+    } else {
+      const r = spawnSync('bash', [sh, '--once'], { encoding: 'utf8', timeout: 15000 });
+      let ok = false;
+      let detail = (r.stdout || r.stderr || '').trim().slice(0, 120);
+      try {
+        const j = JSON.parse(detail);
+        ok = j.ok === true && Number(j.idleSeconds) >= 0;
+        if (j.ok === true && Number(j.idleSeconds) < 0) {
+          detail = platform.name === 'linux'
+            ? '采不到空闲时长（需要 xprintidle；Wayland 下无统一接口）'
+            : '采不到空闲时长';
+        }
+      } catch (_) {}
+      add('optional', 'presence', ok, '在场采样器可用', ok ? detail : detail,
+        ok ? '' : (platform.name === 'linux'
+          ? '装 xprintidle（apt install x11-utils / dnf install xorg-x11-utils）。'
+            + '没有它也能用，只是判定退到「一律推卡片」'
+          : '没有它也能用，只是判定退到「一律推卡片」'));
+    }
   }
 
   const auto = platform.autostart || {};
