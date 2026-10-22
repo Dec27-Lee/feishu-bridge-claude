@@ -52,7 +52,6 @@ async function announceAndLaunch(messageId, threadId, cwd) {
 // 不再投递任何内容：用户选完工作区后只回一张「创建成功」，正文由用户自己再发。
 // resumeSid 有值时走 `claude --resume <旧id>`（恢复历史会话），否则新建一个会话。
 async function launchWindow(threadId, messageId, cwd, resumeSid) {
-  const { spawn } = require('child_process');
   const crypto = require('crypto');
   // 恢复会话时，Claude 侧沿用旧的 sessionId；映射也必须用同一个 id，
   // 否则 SessionStart hook 注册上来的记录对不上，话题就路由不到。
@@ -81,12 +80,30 @@ async function launchWindow(threadId, messageId, cwd, resumeSid) {
     }
   }
 
-  const vbs = path.join(__dirname, 'launch-claude.vbs');
-  const vbsArgs = ['//nologo', vbs, sessionId, cwd];
-  if (isResume) vbsArgs.push(sessionId);
-  spawn('cscript.exe', vbsArgs, {
-    detached: true, stdio: 'ignore', windowsHide: true,
-  }).unref();
+  // 开窗一律走平台层。这里曾经自己拼了一份 cscript 命令直接 spawn，
+  // 结果平台层的所有修复（wt.exe 绝对路径、失败可见性）全都绕过了——
+  // 出问题时表现为「永远 30 秒超时」，而平台的报错逻辑一次都没跑到。
+  try {
+    platform.spawnWindow({ sessionId, cwd, resumeId: isResume ? sessionId : null });
+  } catch (e) {
+    lib.log('error', `开窗失败 ${sessionId}：${e.message}`);
+    replyCard(messageId, {
+      schema: '2.0',
+      config: { wide_screen_mode: true },
+      header: { title: { tag: 'plain_text', content: '窗口拉不起来' }, template: 'red' },
+      body: {
+        elements: [
+          { tag: 'markdown', content: `📁 \`${cwd}\`` },
+          { tag: 'hr' },
+          { tag: 'markdown', content: e.message },
+          { tag: 'hr' },
+          { tag: 'markdown', content: '这通常是终端或脚本层面的问题，不是目录权限。'
+            + '在电脑上手动开一个窗口，然后在这个话题里发 `#resume` 绑定即可继续。' },
+        ],
+      },
+    });
+    return;
+  }
 
   lib.log('bridge', `${isResume ? '恢复会话' : '开新窗口'} ${sessionId} (cwd=${cwd})，等待注册`);
 
