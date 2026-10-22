@@ -61,12 +61,31 @@ module.exports = {
   // 新开一个 Windows Terminal 窗口跑 claude。
   // VBS 负责两件事：清空继承来的 CLAUDECODE / *_SESSION_ID 等环境变量
   // （否则新窗口会关掉转录保存、或把 inbox 指到错误的会话上），以及 cd 到目标目录。
+  //
+  // 这里刻意用 spawnSync 而不是 spawn + unref：cscript 本身只跑几百毫秒，
+  // 而且**必须能看见它失败了**。之前用 spawn 的后果是——VBS 起不来时毫无痕迹，
+  // 界面只显示「30 秒未注册」，完全看不出是开窗这一步就挂了。
   spawnWindow({ sessionId, cwd, resumeId }) {
     const vbs = path.join(HERE, 'launch-claude.vbs');
     if (!fs.existsSync(vbs)) throw new Error(`缺少 ${vbs}`);
+
     const args = ['//nologo', vbs, sessionId, cwd];
     if (resumeId) args.push(resumeId);
-    spawn('cscript.exe', args, { detached: true, stdio: 'ignore', windowsHide: true }).unref();
+
+    const r = spawnSync('cscript.exe', args, { encoding: 'utf8', timeout: 20000 });
+
+    if (r.error) throw new Error(`cscript 无法执行：${r.error.message}`);
+    if (r.status !== 0) {
+      const msg = ((r.stdout || '') + (r.stderr || '')).trim().slice(0, 400);
+      throw new Error(`launch-claude.vbs 退出码 ${r.status}${msg ? `：${msg}` : ''}`);
+    }
+
+    // 退出码 0 也可能什么都没做（比如 %TEMP% 异常导致脚本写到别处）。
+    // 校验中间产物确实生成了——这是能在这一秒内发现问题的唯一可靠信号。
+    const bat = path.join(process.env.TEMP || '', `cc-launch-${String(sessionId).slice(0, 8)}.cmd`);
+    if (!fs.existsSync(bat)) {
+      throw new Error(`启动脚本没有生成（期望在 ${bat}）。检查 VBS 的 %TEMP% 是否可用。`);
+    }
     return true;
   },
 
