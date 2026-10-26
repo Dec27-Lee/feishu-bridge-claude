@@ -183,7 +183,7 @@ async function main() {
   `], { cwd: ROOT, encoding: 'utf8', env: env(p) });
   let loaded = [];
   try { loaded = JSON.parse(pluginLoad.stdout.trim()); } catch (_) {}
-  check('四个插件全部加载', loaded.length === 4, loaded.map((x) => x.id).join(','));
+  check('全部插件加载', loaded.length === 5, loaded.map((x) => x.id).join(','));
   check('core 有服务与 SessionStart hook',
     loaded.some((x) => x.id === 'core' && x.services.length === 1 && x.hooks.includes('SessionStart')));
   check('ask 带 PreToolUse hook', loaded.some((x) => x.id === 'ask' && x.hooks.includes('PreToolUse')));
@@ -553,7 +553,7 @@ async function main() {
   const dumped = cfgMod.dumpSchema(Object.fromEntries(
     require(path.join(ROOT, 'kernel', 'plugin.js')).discover().map((m) => [m.id, m])));
   check('--dump 能导出全部插件 schema',
-    Object.keys(dumped.plugins).length === 4
+    Object.keys(dumped.plugins).length === 5
       && !!(dumped.plugins.ask.schema.properties.awayWaitSeconds || {})['x-ui'],
     Object.keys(dumped.plugins).join(','));
 
@@ -608,7 +608,293 @@ async function main() {
       sent.some((o) => o.kind === 'send') && !!(tr && tr.threadId), tr ? tr.threadId : '无归属记录');
   }
 
-  console.log('\n9d. 项目挪过位置后 hooks 要改指到新位置');
+  console.log('\n9d. 实时状态卡');
+  {
+    // 这个功能的核心承诺是「刷新不产生新消息」，所以用例必须同时守住两件事：
+    //   1. 内容变了 → 发 patch（不是发新消息）
+    //   2. 内容没变 → 一个请求都不发
+    // 只验第 1 条的话，写成每秒无脑 patch 也能通过——而那就等于给用户刷屏。
+    //
+    // 必须在**子进程**里跑：probe 与 kernel/lib 在 require 时就把
+    // ~/.claude 与 data/ 算成了常量（与生产代码一致，那是刻意的）。
+    // 在主进程里 require 会读到本机真实的会话表，跑到用户自己的窗口上去。
+    const script = `
+      const fs = require('fs');
+      const path = require('path');
+      const ROOT = ${JSON.stringify(ROOT)};
+      const statusMod = require(path.join(ROOT, 'plugins', 'status', 'index.js'));
+      const probeMod = require(path.join(ROOT, 'plugins', 'status', 'src', 'probe.js'));
+      const lib = require(path.join(ROOT, 'kernel', 'lib.js'));
+
+      const sessDir = path.join(process.env.FEISHU_CLAUDE_HOME, 'sessions');
+      const projDir = path.join(process.env.FEISHU_CLAUDE_HOME, 'projects', 'statusdemo');
+      fs.mkdirSync(projDir, { recursive: true });
+      const sid = 'status-sess';
+      const transcript = path.join(projDir, sid + '.jsonl');
+      const reg = (sessionId, status) => fs.writeFileSync(path.join(sessDir, process.pid + '.json'),
+        JSON.stringify({ pid: process.pid, sessionId, cwd: lib.ROOT, name: '状态卡窗口',
+          status, statusUpdatedAt: Date.now() }));
+
+      const line = (o) => JSON.stringify(o) + '\\n';
+      fs.writeFileSync(transcript,
+        line({ type: 'user', message: { role: 'user', content: '跑一下测试' }, timestamp: new Date().toISOString() })
+        + line({ type: 'assistant', timestamp: new Date().toISOString(), message: { role: 'assistant', content: [
+          { type: 'text', text: '先跑测试。' },
+          { type: 'tool_use', id: 'tu_1', name: 'Bash', input: { command: 'npm test', description: '跑单测' } },
+        ] } })
+        + line({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tu_1', content: 'ok' }] } })
+        + line({ type: 'assistant', timestamp: new Date().toISOString(), message: { role: 'assistant', content: [
+          { type: 'tool_use', id: 'tu_2', name: 'Bash', input: { command: 'npm run build', description: '构建产物' } },
+        ] } })
+        // 会话标题：卡片标题栏必须用它，不能退回「目录名-短哈希」那种派生名
+        + line({ type: 'ai-title', aiTitle: '给状态卡起个好名字' }));
+      reg(sid, 'busy');
+
+      const threads = path.join(process.env.FEISHU_DATA_DIR, 'threads');
+      fs.mkdirSync(threads, { recursive: true });
+      fs.writeFileSync(path.join(threads, sid + '.json'),
+        JSON.stringify({ sessionId: sid, rootMessageId: 'om_root_status', threadId: 'omt_status', at: Date.now() }));
+
+      const pr = probeMod.probe(sid);
+      const ctx = { config: { intervalSeconds: 2, pinCard: false, showToolDetail: true },
+        dataDir: path.join(process.env.FEISHU_DATA_DIR, 'plugins', 'status'),
+        log: () => {}, lib };
+      // 正式运行时这步在 start() 里做；这里手动调，才能验「重启后接着用同一张卡」
+      statusMod.loadCards(ctx);
+
+      const outbox = path.join(process.env.FEISHU_MOCK_DIR, 'outbox.jsonl');
+      const count = () => { try { return fs.readFileSync(outbox, 'utf8').split('\\n').filter(Boolean).length; } catch (_) { return 0; } };
+      const since = (n) => { try {
+        return fs.readFileSync(outbox, 'utf8').split('\\n').filter(Boolean).slice(n).map((l) => JSON.parse(l));
+      } catch (_) { return []; } };
+      // tick 是异步的（改用异步 spawn 是为了不阻塞主循环），逐轮 await。
+      // node -e 是 CJS，没有顶层 await，所以整段包在 async 函数里。
+      const tick = () => statusMod.tick(ctx, sid, {
+        sessionId: sid, pid: process.pid, cwd: lib.ROOT, name: '状态卡窗口',
+        status: JSON.parse(fs.readFileSync(path.join(sessDir, process.pid + '.json'), 'utf8')).status,
+        statusUpdatedAt: Date.now(),
+      });
+      const n0 = () => { try { return fs.readFileSync(outbox, 'utf8').split('\\n').filter(Boolean).length; } catch (_) { return 0; } };
+      const s0 = (n) => { try {
+        return fs.readFileSync(outbox, 'utf8').split('\\n').filter(Boolean).slice(n).map((l) => JSON.parse(l));
+      } catch (_) { return []; } };
+
+      (async () => {
+        // 第一轮：开卡
+        let n = n0();
+        const r1 = { patched: (await tick()) ? 1 : 0 };
+        const wave1 = s0(n);
+
+        // 第二轮：内容没变
+        n = n0();
+        const r2 = { patched: (await tick()) ? 1 : 0 };
+        const wave2 = s0(n);
+
+        // 第三轮：换了个工具（写文件），必须 patch 而不是新发
+        fs.appendFileSync(transcript, line({ type: 'assistant', timestamp: new Date().toISOString(),
+          message: { role: 'assistant', content: [
+            { type: 'tool_use', id: 'tu_3', name: 'Write', input: { file_path: 'src/a.js', content: 'x' } }] } }));
+        reg(sid, 'busy');
+        n = n0();
+        const r3 = { patched: (await tick()) ? 1 : 0 };
+        const wave3 = s0(n);
+
+        // 第三轮 b：一个**已经跑完**的后台命令，外加一条 api-request-blob 副本。
+        // 转录会把同一批 tool_use 复制进 blob 记录里；如果拿 blob 当证据，
+        // 这个已经结束的后台命令会永远被判成「还在跑」，卡片就一直黄着。
+        // 这正是线上真实踩到的问题（启了个后台 shell 之后卡片再也不收）。
+        fs.appendFileSync(transcript, [
+          line({ type: 'assistant', timestamp: new Date().toISOString(), message: { role: 'assistant', content: [
+            { type: 'tool_use', id: 'tu_bg', name: 'Bash',
+              input: { run_in_background: true, description: '起个后台' } }] } }),
+          line({ type: 'user', message: { role: 'user', content: [
+            { type: 'tool_result', tool_use_id: 'tu_bg', content: 'running in background' }] } }),
+          // blob 的 content 与真实记录同构，但没有 type=user/assistant 的语义
+          line({ type: 'api-request-blob', message: { role: 'assistant', content: [
+            { type: 'tool_use', id: 'tu_bg', name: 'Bash',
+              input: { run_in_background: true, description: '起个后台' } }] } }),
+        ].join('\\n') + '\\n');
+        const prBg = probeMod.probe(sid);
+        const bgSubtasks = (prBg && prBg.subtasks) || [];
+
+        // 第四轮：窗口停下
+        reg(sid, 'idle');
+        n = n0();
+        await tick();
+        const wave4 = s0(n);
+
+        // 第四轮 b：主会话说完了，但它拉起的子代理还没回来。
+        // 这是用户要的关键区分——此时说「本轮结束」是错的，卡片必须显示
+        // 「还有子任务在跑」。而且必须**另起一张**：AI 的回复卡刚落到话题底部，
+        // 原来那张状态卡已经被顶到上面看不见了。
+        fs.appendFileSync(transcript, line({ type: 'assistant', timestamp: new Date().toISOString(),
+          message: { role: 'assistant', content: [
+            { type: 'tool_use', id: 'tu_sub', name: 'Agent',
+              input: { subagent_type: 'Explore', description: '扫一遍依赖', prompt: '@@@' } }] } }));
+        // 先回到 busy 再回 idle，才构成一次真实的「本轮结束」翻转
+        reg(sid, 'busy');
+        await tick();
+        reg(sid, 'idle');
+        n = n0();
+        await tick();
+        const wave4b = s0(n);
+        // 换卡时先是 retireCard 的 patch（旧卡灰化），再是 reply（新卡）。
+        // 断言要看**新卡那张**，不是第一条调用。
+        const new4b = wave4b.find((o) => o.kind === 'reply');
+        const card4b = JSON.stringify((new4b || {}).card || {});
+        const prSub = probeMod.probe(sid);
+        const mainMid = (wave1[0] || {}).messageId;
+
+        // 第四轮 c：用户又发了新的一句 → 新一轮开始，必须换一张落在底部的卡。
+        // 这是「卡片被用户的新消息顶掉」那条路径；靠转录里新出现的**人打的**那句话判定。
+        fs.appendFileSync(transcript,
+          line({ type: 'user', timestamp: new Date().toISOString(),
+            message: { role: 'user', content: '再改一版' } }));
+        reg(sid, 'busy');
+        n = n0();
+        await tick();
+        const wave4c = s0(n);
+
+        // 落盘与重启：stop() 会立刻写盘。清空内存后重新加载，再刷一轮，
+        // 不许出现任何 reply（那意味着又开了一张新卡）。
+        //
+        // 必须放在第五轮**之前**：那一轮会把会话表换成另一个 sessionId，
+        // drain 顺着「窗口已经没了」把记录丢掉——那时再查文件自然是空的。
+        statusMod.stop();
+        const dataPlugins = path.join(process.env.FEISHU_DATA_DIR, 'plugins', 'status');
+        const cardsFile = path.join(dataPlugins, 'cards.json');
+        let saved = null;
+        try { saved = JSON.parse(fs.readFileSync(cardsFile, 'utf8')); } catch (_) {}
+        const persisted = !!(saved && saved[sid] && saved[sid].messageId);
+
+        statusMod.cards.clear();
+        statusMod.loadCards({ dataDir: dataPlugins, log: () => {} });
+        n = n0();
+        await tick();
+        const afterRestart = s0(n);
+        const memoryMid = (statusMod.cards.get(sid) || {}).messageId;
+
+        // 第五轮：一个没有话题的活跃窗口，不该发卡（走 drain 才能覆盖过滤逻辑）
+        reg('no-topic-status', 'busy');
+        n = n0();
+        await statusMod.drain(ctx);
+        const wave5 = s0(n);
+        statusMod.stop();
+
+        console.log(JSON.stringify({
+          probe: pr, r1, r2, r3, wave1, wave2, wave3, wave4, wave4b, wave4c, wave5,
+          subTasks: prSub && prSub.subtasks,
+          bgSubtasks,
+          card4b, mainMid, mainMid2: (new4b || {}).messageId,
+          persisted, cardsFile, restartSameCard: afterRestart.filter((o) => o.kind === 'reply').length === 0,
+          restartMid: memoryMid,
+        }));
+      })().catch((e) => { console.error(e.stack || e.message); process.exit(1); });
+    `;
+    const r = spawnSync(process.execPath, ['-e', script], { cwd: ROOT, encoding: 'utf8', env: env(p), timeout: 60000 });
+    let res = {};
+    try { res = JSON.parse((r.stdout || '').trim().split('\n').pop()); } catch (_) {}
+    if (!res || !res.r1) {
+      check('状态卡用例能在沙箱里跑起来', false,
+        `status=${r.status} ${(r.stderr || '').slice(0, 400)} | stdout=${(r.stdout || '').slice(0, 300)}`);
+    } else {
+      const pr = res.probe || {};
+      // 探测：正在跑的工具要从转录里读出来，且是**没闭合**的那个（tu_1 已闭合，不算）
+      check('探测到没闭合的工具', !!(pr.tool && pr.tool.name === 'Bash'), JSON.stringify(pr.tool));
+      check('已完成的工具不误报为「正在跑」', pr.tool && pr.tool.arg === '构建产物', String(pr.tool && pr.tool.arg));
+      check('读到本轮最后一句正文', pr.said === '先跑测试。', String(pr.said));
+      // 标题栏必须是会话的名字，不能是「目录名-短哈希」那种派生名——
+      // 用户看到 tt-design-space-ai-26 根本认不出是哪一个窗口。
+      check('标题取会话名而不是派生名', pr.title === '给状态卡起个好名字', String(pr.title));
+      check('读到这一轮人发的原话', pr.myPrompt === '跑一下测试', String(pr.myPrompt));
+
+      const replies = res.wave1.filter((o) => o.kind === 'reply');
+      check('首次刷新开出一张状态卡', replies.length === 1 && res.r1.patched === 1,
+        `${res.wave1.length} 条调用`);
+      check('状态卡挂在窗口自己的话题里', (replies[0] || {}).replyTo === 'om_root_status',
+        String((replies[0] || {}).replyTo));
+      check('状态卡带正在用的工具',
+        JSON.stringify((replies[0] || {}).card || {}).includes('构建产物'), '');
+
+      // 内容没变 → 一个请求都不发。写成每轮无脑 patch 也能过前几条用例，
+      // 而那就等于给用户刷屏，所以这条必须单独守。
+      check('内容没变时不发任何请求', res.wave2.length === 0 && res.r2.patched === 0,
+        `${res.wave2.length} 条调用`);
+
+      check('内容变了走原地 patch',
+        res.wave3.length === 1 && res.wave3[0].kind === 'patch',
+        res.wave3.map((o) => o.kind).join(',') || '没有调用');
+      check('patch 打到同一张卡上（不是新消息）',
+        !!(res.wave3[0] && res.wave3[0].messageId
+          && res.wave3[0].messageId === (replies[0] || {}).messageId),
+        res.wave3[0] ? String(res.wave3[0].messageId) : '');
+
+      check('这轮结束后卡片标成「本轮结束」',
+        res.wave4.some((o) => JSON.stringify(o.card || {}).includes('本轮结束')), '');
+
+      // 用户要的核心区分：主会话回了消息，但子代理还在跑。
+      // 卡片这时不能写「本轮结束」，否则他以为活儿完了。
+      check('识别出未闭合的子代理',
+        Array.isArray(res.subTasks) && res.subTasks.some((s) => s.kind === 'agent' && s.name === 'Explore'),
+        JSON.stringify(res.subTasks));
+      // 已闭合的后台命令 + 同名 blob 副本，都不该算「还在跑」
+      check('已跑完的后台命令不算子任务', (res.bgSubtasks || []).length === 0,
+        JSON.stringify(res.bgSubtasks));
+      check('子代理还在跑时卡片不说「本轮结束」',
+        res.card4b.includes('子任务还在跑') && !res.card4b.includes('本轮结束'), res.card4b.slice(0, 160));
+      check('子代理还在跑时卡片标黄', res.card4b.includes('orange'), '');
+      // 另起一张而不是 patch 旧的：旧卡在话题里已经被 AI 的回复顶到上面看不见了
+      // 另起一张，而不是继续 patch 旧卡：旧卡在话题里已经被 AI 的回复顶到上面看不见了。
+      // 换卡时那条 patch 是**收掉旧卡**（灰化），不是刷新它，所以不算「还在用旧卡」。
+      check('有子任务续跑时另起一张卡',
+        res.wave4b.some((o) => o.kind === 'reply')
+          && !!res.mainMid2 && res.mainMid2 !== res.mainMid,
+        `新卡=${res.mainMid2 || '无'} 旧卡=${res.mainMid}`);
+
+      // 用户发了新消息 → 新一轮。旧卡要被收掉（灰化 patch），新卡落到底部。
+      check('用户开新一轮时换一张新卡',
+        res.wave4c.some((o) => o.kind === 'patch' && !!(o.card || {}).header)
+          && res.wave4c.some((o) => o.kind === 'reply'),
+        res.wave4c.map((o) => o.kind).join(',') || '没有调用');
+      check('换卡时新卡不是原来那张',
+        (res.wave4c.find((o) => o.kind === 'reply') || {}).messageId !== res.mainMid,
+        String((res.wave4c.find((o) => o.kind === 'reply') || {}).messageId));
+      check('没有话题的窗口不发卡', res.wave5.length === 0, `${res.wave5.length} 条调用`);
+
+      // 卡上显示哪几行是配置项（配置页能改）。关掉一项必须真的少一行——
+      // 只把配置读进来不生效，是这类「开关」最常见的假实现。
+      {
+        const { buildStatusCard } = require(path.join(ROOT, 'plugins', 'status', 'src', 'card.js'));
+        const base = {
+          title: 'T', cwd: '/w', running: true, runningSince: Date.now() - 1000, idleSince: 0,
+          probe: { myPrompt: '你说的', tool: { name: 'Bash', arg: 'x' }, edited: ['/a/b.js'], said: '它说的' },
+          stats: '██░░ 50%',
+        };
+        const full = buildStatusCard(base);
+        const bare = buildStatusCard({
+          ...base,
+          view: {
+            showPrompt: false, showToolDetail: false, showEditedFiles: false,
+            showModelSaid: false, showStats: false,
+          },
+        });
+        const text = (c) => JSON.stringify(c.body.elements);
+        check('关掉显示项后卡片真的变短', bare.body.elements.length < full.body.elements.length,
+          `${full.body.elements.length} -> ${bare.body.elements.length}`);
+        check('关掉的项一个都不剩',
+          !/你说/.test(text(bare)) && !/它说/.test(text(bare)) && !/本轮改了/.test(text(bare))
+            && !/📦/.test(text(bare)) && !/🔧/.test(text(bare)),
+          text(bare).slice(0, 160));
+      }
+
+      // 重启不该重开卡：卡片 id 必须落盘，否则每重启一次就是每个话题多一条新消息 + 一个未读。
+      // 这个功能改代码就要重启，一天能攒出一串卡片——用户看到的就是「它在不停发新消息」。
+      check('卡片记录已落盘', !!res.persisted, String(res.cardsFile || ''));
+      check('重启后接着用原来那张卡，不重开', !!res.restartSameCard, `memory=${res.restartMid || '无'}`);
+    }
+  }
+
+  console.log('\n9e. 项目挪过位置后 hooks 要改指到新位置');
   {
     // 搬目录后旧 hook 指向不存在的路径。只加不删的话，每个事件会跑两遍：
     // 一遍报「找不到文件」，一遍正常工作——这是最难查的那类问题。
@@ -653,7 +939,7 @@ async function main() {
       cmdsAll[0] || '');
   }
 
-  console.log('\n9e. 上下文进度条');
+  console.log('\n9f. 上下文进度条');
   {
     // 这段只在离线渲染时跑到，错了没人立刻发现，但它印在每一张卡片上。
     // 真实故障：分母写死 200000，而实际窗口是 500000 →
@@ -674,7 +960,7 @@ async function main() {
     check('进度条与百分比始终一致', mismatch === 0, `${mismatch} 处不一致`);
   }
 
-  console.log('\n9f. 识别「用户这一轮在终端里说了什么」');
+  console.log('\n9g. 识别「用户这一轮在终端里说了什么」');
   {
     // Stop hook 的 stdin 里没有用户输入，只能从转录尾部反查。
     // 难点全在「把系统注入的文本排除掉」——转录里 user 角色混着一大堆
@@ -733,7 +1019,7 @@ async function main() {
       JSON.stringify(lastUserInput(tf)));
   }
 
-  console.log('\n9g. 长的终端输入折起来而不是截断');
+  console.log('\n9h. 长的终端输入折起来而不是截断');
   {
     // 短的一行摆出来，长的用 collapsible_panel 折叠——飞书里唯一能
     // 「点一下看全文」的组件。以前是直接截到 300 字，长输入等于丢了。

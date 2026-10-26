@@ -33,6 +33,20 @@
       "presenceAware": true,
       "awayWaitSeconds": 1800,
       "notifyWhenPresent": true
+    },
+    "status": {
+      "intervalSeconds": 2,
+      "pinCard": true,
+      "showPrompt": true,
+      "showToolDetail": true,
+      "showEditedFiles": true,
+      "showModelSaid": true,
+      "showStats": true,
+      "showSubagentCard": true,
+      "newCardOnUserMessage": true,
+      "promptMaxChars": 1200,
+      "textMaxChars": 140,
+      "maxSubtaskLines": 3
     }
   }
 }

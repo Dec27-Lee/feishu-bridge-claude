@@ -82,11 +82,20 @@ add('required', 'config', hasCfg && !!cfg.chatId,
 
 // ---- 4. Claude Code 与 hooks ----
 
+// 有些工具（含 Windows 上的编辑器）会给 JSON 写 BOM。Node 的 JSON.parse 不认它，
+// 不剥掉就会把一份完全正常的 settings.json 判成「解析失败」，
+// 表现是 check 说「缺少本项目的 hook」、verify 说「读不到 settings.json」——
+// 明明装得好好的。所有读 settings.json 的地方都要先剥。
+function readJsonStripBom(file) {
+  const raw = fs.readFileSync(file, 'utf8');
+  return JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+}
+
 const home = process.env.FEISHU_INSTALL_HOME || os.homedir();
 const settingsFile = path.join(home, '.claude', 'settings.json');
 let settings = null;
 try {
-  settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+  settings = readJsonStripBom(settingsFile);
 } catch (_) {}
 
 const hooksCfg = require('./hooks-config');

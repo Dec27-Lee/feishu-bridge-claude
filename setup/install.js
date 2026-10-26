@@ -48,6 +48,14 @@ function writeJson(file, obj) {
   fs.renameSync(tmp, file);
 }
 
+// 读 JSON 时剥掉 BOM。有些工具（含 Windows 上的编辑器）会写 BOM，
+// JSON.parse 不认它——不剥的话，一份完全正常的 settings.json 会被判成
+// 「解析失败」，安装器直接抛错退出。
+function readJson(file) {
+  const raw = fs.readFileSync(file, 'utf8');
+  return JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+}
+
 function say(msg) { console.log(msg); }
 function step(msg) { console.log(`\n=== ${msg} ===`); }
 
@@ -67,7 +75,7 @@ function installHooks() {
   const file = path.join(HOME, '.claude', 'settings.json');
   let settings = {};
   if (fs.existsSync(file)) {
-    try { settings = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) {
+    try { settings = readJson(file); } catch (e) {
       throw new Error(`${file} 解析失败：${e.message}`);
     }
   }

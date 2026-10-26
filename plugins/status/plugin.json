@@ -1,0 +1,119 @@
+{
+  "id": "status",
+  "name": "实时状态卡",
+  "version": "1.0.0",
+  "description": "每个窗口的话题里挂一张常驻卡片，原地刷新它正在干什么，不产生任何新消息和未读。",
+  "core": false,
+  "depends": ["core"],
+  "config": {
+    "intervalSeconds": {
+      "type": "integer",
+      "default": 2,
+      "minimum": 2,
+      "maximum": 60,
+      "title": "刷新间隔（秒）",
+      "description": "窗口在跑时每多少秒原地刷新一次。调大可以省接口调用；调小看着更实时。",
+      "ui:group": "状态卡",
+      "ui:widget": "number"
+    },
+    "pinCard": {
+      "type": "boolean",
+      "default": true,
+      "title": "把状态卡置顶",
+      "description": "卡片只在话题里出现一次，后面被回复刷上去就不好找了。置顶后从群里的「置顶」能一键点回来。群限制置顶权限时关掉。",
+      "ui:group": "状态卡",
+      "ui:widget": "switch"
+    },
+
+    "showPrompt": {
+      "type": "boolean",
+      "default": true,
+      "title": "卡上显示「你说」",
+      "description": "把这一轮你发的那句话摆在最上面（终端里敲的和飞书发的都算）。关掉后只显示窗口在干什么。",
+      "ui:group": "卡上显示什么",
+      "ui:widget": "switch"
+    },
+    "showToolDetail": {
+      "type": "boolean",
+      "default": true,
+      "title": "显示正在用的工具",
+      "description": "多一行「🔧 Bash：npm test」。关掉只保留状态和计时。",
+      "ui:group": "卡上显示什么",
+      "ui:widget": "switch"
+    },
+    "showEditedFiles": {
+      "type": "boolean",
+      "default": true,
+      "title": "显示本轮改过的文件",
+      "description": "多一行「✏️ 本轮改了 3 个文件」。窗口在改代码时最有用。",
+      "ui:group": "卡上显示什么",
+      "ui:widget": "switch"
+    },
+    "showModelSaid": {
+      "type": "boolean",
+      "default": true,
+      "title": "显示窗口说的话",
+      "description": "多一行「🤖 它说：…」，取这一轮 AI 的最后一段正文。关掉卡片更短。",
+      "ui:group": "卡上显示什么",
+      "ui:widget": "switch"
+    },
+    "showStats": {
+      "type": "boolean",
+      "default": true,
+      "title": "显示上下文用量",
+      "description": "多一行「📦 ████ 62% 311k · Tokens 1.8B」。不需要盯用量就关掉。",
+      "ui:group": "卡上显示什么",
+      "ui:widget": "switch"
+    },
+    "showSubagentCard": {
+      "type": "boolean",
+      "default": true,
+      "title": "子代理还在跑时另起一张卡",
+      "description": "主会话这一轮回完了、但它拉起的子代理还没回来时，在话题底部补一张黄卡。关掉则一切都在原来那张卡里刷新（但那张可能已被回复顶出屏幕）。",
+      "ui:group": "卡上显示什么",
+      "ui:widget": "switch"
+    },
+    "newCardOnUserMessage": {
+      "type": "boolean",
+      "default": true,
+      "title": "你发新消息时换一张新卡",
+      "description": "你在终端或飞书里开了新一轮时，旧卡说的已经过时，换一张落在话题底部。关掉则一直用同一张（只原地刷新，一条新消息都不产生）。",
+      "ui:group": "卡上显示什么",
+      "ui:widget": "switch"
+    },
+
+    "promptMaxChars": {
+      "type": "integer",
+      "default": 1200,
+      "minimum": 100,
+      "maximum": 6000,
+      "title": "「你说」最多显示多少字",
+      "description": "超过这个长度折进可展开面板，并注明原文总字数。飞书单张卡片上限 30KB，别设太大。",
+      "ui:group": "显示长度",
+      "ui:widget": "number"
+    },
+    "textMaxChars": {
+      "type": "integer",
+      "default": 140,
+      "minimum": 40,
+      "maximum": 400,
+      "title": "单行摘要最多多少字",
+      "description": "「它说」和「你说」的短形态各自压成一行时的截断长度。",
+      "ui:group": "显示长度",
+      "ui:widget": "number"
+    },
+    "maxSubtaskLines": {
+      "type": "integer",
+      "default": 3,
+      "minimum": 1,
+      "maximum": 8,
+      "title": "子任务最多列几条",
+      "description": "同时在跑的子代理/后台命令超过这个数只列前几个。",
+      "ui:group": "显示长度",
+      "ui:widget": "number"
+    }
+  },
+  "services": {
+    "ticker": "index.js"
+  }
+}

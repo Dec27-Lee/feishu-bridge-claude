@@ -148,7 +148,11 @@ function hooksStale() {
   if (!fs.existsSync(file)) return { installed: false, stale: false };
 
   let settings;
-  try { settings = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (_) {
+  try {
+    // 剥 BOM：有些工具会写，JSON.parse 不认
+    const raw = fs.readFileSync(file, 'utf8');
+    settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+  } catch (_) {
     return { installed: false, stale: false, error: 'settings.json 解析失败' };
   }
   if (!hooksCfg.installed(settings)) return { installed: false, stale: false };

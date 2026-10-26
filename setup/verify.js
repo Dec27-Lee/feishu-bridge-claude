@@ -141,7 +141,12 @@ if (cfg) {
   const hooksCfg = require('./hooks-config');
   const home = process.env.FEISHU_INSTALL_HOME || os.homedir();
   let settings = null;
-  try { settings = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8')); } catch (_) {}
+  // 有些工具会给 JSON 写 BOM，JSON.parse 不认——不剥掉会把一份正常的
+  // settings.json 判成「读不到」（check.js 里也有同一个处理）。
+  try {
+    const raw = fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8');
+    settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+  } catch (_) {}
   if (!settings) {
     add('hooks', false, 'hooks 已安装', '读不到 ~/.claude/settings.json', 'node setup/install.js --hooks');
   } else if (!hooksCfg.installed(settings)) {

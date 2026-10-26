@@ -37,6 +37,7 @@
 │    ask/          远程代答 AskUserQuestion                │
 │    permission/   远程点权限确认                           │
 │    notify/       任务完成通知                             │
+│    status/       话题里的实时状态卡（原地刷新）           │
 │    <你自己的>/   丢一个目录进来就生效                     │
 ├──────────────────────────────────────────────────────────┤
 │  kernel/         与业务无关的基础设施                     │
@@ -369,6 +370,27 @@ Claude Code 触发 PreToolUse(AskUserQuestion)
 → hook 轮询到 done → 输出 allow + updatedInput{answers}
 ```
 
+### 8.2b 窗口此刻在干什么（status 插件）
+
+不经过 hook，也不产生任何新消息：
+
+```
+bridge 每 2 秒 → plugins/status/index.js
+  ├─ liveSessions()  读 ~/.claude/sessions/<pid>.json 的 status（busy/idle）
+  ├─ probe()         读转录尾部，找**没闭合**的 tool_use + 本轮最后一句正文
+  └─ 内容签名变了？
+       ├─ 是 → patch 已有卡片（im messages patch）；从未发过则 reply 到话题根
+       └─ 否 → 什么都不发
+```
+
+两条硬约束，改这里时别弄丢：
+
+1. **只能 patch，不能发新消息。** 发新消息就进未读列表、把话题顶起来，
+   这个功能的存在意义就是把「看进度」和「收推送」分开。
+2. **不能阻塞主循环。** `kernel/lib.js` 的 `larkSync` 是 `spawnSync`，
+   实测一次 1.5 秒；状态卡每 2 秒一次，用它会把事件消费和卡片回调一起堵住。
+   所以这个插件自己起异步 `spawn`，串行排队，`MAX_PER_TICK` 控制每轮刷几张。
+
 ### 8.3 「一个窗口只能有一棵树」——话题归属的不变式
 
 `data/threads/<sessionId>.json` 是**唯一**的话题归属记录。凡是要往飞书发东西的模块，
@@ -489,4 +511,5 @@ module.exports = {
 | `kernel/presence.js` | 窗口枚举对判定无用（`windows` 字段谁都不读），但仍在采集 | 下次改在场判定时一起删 |
 | macOS / Linux 的 `presence.sh` | 都是单文件 shell，没有像 Windows 那样编译过的采样器；`ioreg` 每秒被调一次，实测开销可接受但不算低 | 有性能反馈时改成常驻进程（Windows 的 presence.exe 模式） |
 | `setup/` | 有 check/install/verify/update/move/selftest/config-ui，尚无 doctor（运行期交互式排障） | 下一轮 |
+| `plugins/status/` | 靠轮询转录推状态（约 3ms/窗口），飞书侧一次刷新约 1.5 秒。两者都不是事件驱动；若将来有会话状态变化的 hook，可改推 | 有性能反馈时 |
 | ~~配置页~~ | 已实现：`setup/config-ui.js`，读 `--dump` 的同源 schema 起单页，后端零改动 | 见 5.1c |

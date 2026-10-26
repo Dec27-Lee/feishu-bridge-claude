@@ -110,6 +110,23 @@ function handle(argv, opts) {
       return ok({ ok: true, data: { saved_path: out, size_bytes: 10 } });
     }
     if (sub === 'pins' || sub === '+pins' || sub === 'pin') return ok({ ok: true });
+
+    // 原地更新卡片（状态卡靠它刷新）。记进 outbox，用例据此断言「刷新了」与
+    // 「内容没变时没刷新」——只回 ok 的话，两者在调用方看来完全一样。
+    if (sub === 'messages' && a[2] === 'patch') {
+      const mi = a.indexOf('--message-id');
+      const di = a.indexOf('--data');
+      let content = null;
+      try { content = JSON.parse((JSON.parse(a[di + 1]) || {}).content); } catch (_) {}
+      append(OUTBOX, {
+        at: new Date().toISOString(),
+        kind: 'patch',
+        messageId: mi >= 0 ? a[mi + 1] : null,
+        card: content,
+      });
+      return ok({ ok: true, data: {} });
+    }
+
     return ok({ ok: true });
   }
 
@@ -201,6 +218,10 @@ cp.spawn = function patched(cmd, args, opts) {
     setImmediate(() => {
       child.stdout.emit('data', Buffer.from(out.stdout + '\n'));
       child.emit('exit', 0);
+      // 异步调用方（status 插件用 spawn 而不是 spawnSync）等的是 'close'：
+      // 只发 'exit' 的话那个 Promise 永远不 resolve，事件循环空了进程就悄悄退出，
+      // 表现是「脚本跑完了但一行输出都没有」。
+      child.emit('close', 0);
     });
     return child;
   }
