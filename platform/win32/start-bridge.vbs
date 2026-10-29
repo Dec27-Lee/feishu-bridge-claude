@@ -1,5 +1,9 @@
 ' Start the Feishu bridge silently (no console window).
-' Double-click to run. 单实例保护在内核里（data/bridge.pid）。
+' Double-click to run. Single-instance protection lives in the kernel
+' (data/bridge.pid), so running this twice is harmless.
+'
+' Keep this file pure ASCII with CRLF line endings - see watch-bridge.vbs
+' for why (cscript reads .vbs in the ANSI code page and fails silently).
 Option Explicit
 
 Dim sh, fso, here, root

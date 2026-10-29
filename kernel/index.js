@@ -41,6 +41,11 @@ function main() {
 
   const lock = daemon.acquireLock();
   if (!lock.ok) {
+    // 这条分支原来只往 stderr 写。看门狗（watch-bridge.vbs）用
+    // `sh.Run cmd, 0, True` 起进程，stdout/stderr 全被吞掉——于是「桥接一直
+    // 起不来」在磁盘上一点痕迹都不留：日志停在昨天，锁里是个活 pid，
+    // 现场只剩「手机发的消息进不来、状态卡也没了」。所以补一条日志。
+    lib.log('bridge', `拒绝启动：锁里的 pid=${lock.pid} 是本项目的桥接，本次退出`);
     console.error(`已有实例在运行 (pid=${lock.pid})，本次退出。`);
     process.exit(0);
   }

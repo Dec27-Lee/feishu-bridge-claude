@@ -37,6 +37,7 @@
     "status": {
       "intervalSeconds": 2,
       "pinCard": true,
+      "autoUnpin": true,
       "showPrompt": true,
       "showToolDetail": true,
       "showEditedFiles": true,

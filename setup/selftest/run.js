@@ -894,6 +894,71 @@ async function main() {
     }
   }
 
+  console.log('\n9d2. 置顶清理');
+  {
+    // 置顶只增不减，一个月就能攒到两百多条，真要找在用的会话反而翻不到
+    // （实测一天 235 条，220 条是换卡残留）。清理规则必须守住三件事：
+    //   1. 撤掉不再需要的（关掉的窗口、换掉的旧卡）
+    //   2. 保留还在用的（活窗口话题根、当前有效卡）
+    //   3. 人手动置顶的一条都不动 —— 那是用户的东西，不是我们的
+    const now = Date.now();
+    const APP = 'cli_mock';
+    const mk = (id, opType, op, ageMin) => ({
+      chat_id: 'oc_selftest', message_id: id,
+      operator_id: op, operator_id_type: opType,
+      create_time: String(now - ageMin * 60000),
+    });
+    // 前面的用例（开话题、开状态卡、换卡）也往 pins.jsonl 写过记录，
+    // 这一节断言的是这一节自己的那批，先清空。
+    fs.writeFileSync(path.join(p.mock, 'pins.jsonl'), '');
+    fs.writeFileSync(path.join(p.mock, 'pins.json'), JSON.stringify([
+      mk('om_pin_dead_root', 'app_id', APP, 60),      // 关掉的窗口的话题 → 撤
+      mk('om_pin_old_card', 'app_id', APP, 30),       // 换掉的旧卡 → 撤
+      mk('om_pin_live_root', 'app_id', APP, 90),      // 活窗口的话题 → 留
+      mk('om_pin_cur_card', 'app_id', APP, 20),       // 当前有效卡 → 留
+      mk('om_pin_by_human', 'user', 'ou_someone', 40), // 人手动置顶 → 留
+      mk('om_pin_just_now', 'app_id', APP, 1),        // 刚置上，会话表可能还没落定 → 先不动
+    ], null, 2));
+
+    const pinsJs = path.join(ROOT, 'plugins', 'status', 'src', 'pins.js').replace(/\\/g, '/');
+    const script = `
+      const pins = require(${JSON.stringify(pinsJs)});
+      const fs = require('fs');
+      const path = require('path');
+      const keep = new Set(['om_pin_live_root', 'om_pin_cur_card']);
+      const run = async (budget) => {
+        const r = await pins.sweep({ chatId: 'oc_selftest', keep, budget, log: () => {} });
+        const f = path.join(process.env.FEISHU_MOCK_DIR, 'pins.jsonl');
+        const done = fs.existsSync(f)
+          ? fs.readFileSync(f, 'utf8').split('\\n').filter(Boolean).map((l) => JSON.parse(l))
+          : [];
+        return { r, done };
+      };
+      (async () => {
+        const a = await run(10);
+        console.log(JSON.stringify({ first: a, removed: a.done.map((d) => d.messageId) }));
+      })().catch((e) => { console.error(e.stack || e.message); process.exit(1); });
+    `;
+    const r = spawnSync(process.execPath, ['-e', script], { cwd: ROOT, encoding: 'utf8', env: env(p), timeout: 60000 });
+    let res = {};
+    try { res = JSON.parse((r.stdout || '').trim().split('\n').pop()); } catch (_) {}
+    if (!res || !res.first) {
+      check('置顶清理用例能在沙箱里跑起来', false,
+        `status=${r.status} ${(r.stderr || '').slice(0, 400)}`);
+    } else {
+      const removed = res.removed || [];
+      check('撤掉关掉窗口留下的置顶', removed.includes('om_pin_dead_root'), removed.join(','));
+      check('撤掉换卡残留的旧卡置顶', removed.includes('om_pin_old_card'), removed.join(','));
+      check('活窗口的话题置顶不动', !removed.includes('om_pin_live_root'), removed.join(','));
+      check('当前有效卡不动', !removed.includes('om_pin_cur_card'), removed.join(','));
+      check('人手动置顶的不动', !removed.includes('om_pin_by_human'), removed.join(','));
+      // 会话表偶尔漏一拍（窗口刚起、pid 未回收）。那一拍里窗口看起来是「已关闭」，
+      // 撤了下一秒又要重新置顶，白白折腾——所以刚置上的先放五分钟。
+      check('刚置上的先不动', !removed.includes('om_pin_just_now'), removed.join(','));
+      check('只撤该撤的两条', removed.length === 2, `${removed.length} 条：${removed.join(',')}`);
+    }
+  }
+
   console.log('\n9e. 项目挪过位置后 hooks 要改指到新位置');
   {
     // 搬目录后旧 hook 指向不存在的路径。只加不删的话，每个事件会跑两遍：
@@ -1248,6 +1313,34 @@ async function main() {
     staleKept ? '旧锁文件仍在（符合 Windows 实际）' : '旧锁已清');
   again.kill();
   await sleep(300);
+
+  // 残留的锁里那个 pid 被系统分给了别的 node（重启后很常见：vite、MCP server、
+  // 隔壁 Claude 窗口）。只看进程名的话，桥接会一直以为自己已经在跑，永远起不来，
+  // 现象是「手机发的消息进不来、状态卡也没了」，日志里只有一句「已有实例在运行」。
+  // 所以这条用例必须失败在「拒启」上——它守的是桥接能不能被启动这件事。
+  if (process.platform === 'win32') {
+    const other = spawn(process.execPath, ['-e', 'setInterval(()=>{},1000)'], {
+      stdio: 'ignore', windowsHide: true,
+    });
+    await sleep(500);
+    fs.writeFileSync(path.join(p.data, 'bridge.pid'), String(other.pid), 'utf8');
+
+    const third = spawn(process.execPath, [path.join(ROOT, 'kernel', 'index.js')], {
+      cwd: ROOT, env: env(p), stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
+    });
+    let thirdOut = '';
+    third.stdout.on('data', (d) => { thirdOut += d.toString(); });
+    third.stderr.on('data', (d) => { thirdOut += d.toString(); });
+    // 判定要读命令行（PowerShell CIM 约 1.3 秒），比普通启动慢，多等一会
+    await sleep(4000);
+    const tookOver = !thirdOut.includes('已有实例在运行')
+      && fs.readFileSync(path.join(p.data, 'bridge.pid'), 'utf8').trim() === String(third.pid);
+    check('锁里的 pid 被别的 node 复用时能接管', tookOver,
+      tookOver ? `旧 pid=${other.pid} 是别的 node，已接管` : thirdOut.slice(0, 200));
+    third.kill();
+    try { other.kill(); } catch (_) {}
+    await sleep(400);
+  }
 
   // ---- 汇总 ----
   const bad = results.filter((r) => !r.ok);

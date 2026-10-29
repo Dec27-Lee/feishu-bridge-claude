@@ -24,6 +24,14 @@
       "ui:group": "状态卡",
       "ui:widget": "switch"
     },
+    "autoUnpin": {
+      "type": "boolean",
+      "default": true,
+      "title": "自动取消不再需要的置顶",
+      "description": "窗口关掉后把它的话题和卡片从「置顶」里撤掉，换卡时也撤掉旧卡。否则置顶列表会攒满已经不用的会话，真要用的那个反而找不到。只撤机器人自己置顶的，你手动置顶的不动。",
+      "ui:group": "状态卡",
+      "ui:widget": "switch"
+    },
 
     "showPrompt": {
       "type": "boolean",

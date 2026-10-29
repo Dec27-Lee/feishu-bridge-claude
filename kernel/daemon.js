@@ -16,12 +16,25 @@ const LOCK_FILE = path.join(lib.DATA_DIR, 'bridge.pid');
 // 判断旧 pid 时必须真的确认它活着：Windows 上被强杀（或任务管理器结束）的进程
 // 拿不到 SIGTERM，我们的退出钩子不会跑，pid 文件就会残留。只看「文件里有别的 pid
 // 就退出」会导致桥接再也起不来。
+//
+// 但**「那个 pid 上是个 node」还不够**：重启后 pid 会被系统复用，新拿到同一个号码的
+// 很可能是别的 node（vite、MCP server、隔壁 Claude 窗口）。这时桥接会一直以为自己
+// 已经在跑，于是永远起不来、看门狗也救不了——现象就是「手机发的消息进不来、
+// 状态卡也没了」，而且日志里只有一句「已有实例在运行」，看不出是误判。
+// 所以再看一眼命令行：它必须真的是本项目的 kernel/index.js。
 function acquireLock() {
   lib.ensureDirs();
   try {
     const old = parseInt(fs.readFileSync(LOCK_FILE, 'utf8').trim(), 10);
-    if (old && old !== process.pid) {
-      if (platform.pidAlive(old)) return { ok: false, pid: old };
+    if (old && old !== process.pid && platform.pidAlive(old)) {
+      // pidAlive 只回答「是不是 node 还活着」，这里补上「是不是我们的桥接」。
+      // 读命令行要 1 秒上下（Windows 上只有 PowerShell CIM 能给），
+      // 所以只在启动时做这一次，不进任何热路径。
+      const cmd = platform.commandLineOf ? platform.commandLineOf(old) : null;
+      const isOurs = cmd === null || /kernel[\\/]index\.js/i.test(cmd);
+      if (isOurs) return { ok: false, pid: old };
+      lib.log('bridge', `锁里的 pid=${old} 已被别的进程复用（${cmd.slice(0, 80)}），接管`);
+    } else if (old && old !== process.pid) {
       lib.log('bridge', `接管残留的锁（旧 pid=${old} 已不在）`);
     }
   } catch (_) {}

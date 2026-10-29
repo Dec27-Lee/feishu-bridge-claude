@@ -18,9 +18,34 @@ const EXE = path.join(HERE, 'presence.exe');
 
 let presenceChild = null;
 
+// 读某个 pid 的命令行；取不到返回 null（调用方据此退回保守判断）。
+//
+// 为什么单独有这个能力：单实例锁要回答的是「那个 pid 上跑的是**我们的**桥接吗」，
+// 而不是「那里有个 node 吗」。重启后 pid 会被系统复用，只看进程名会误判成
+// 「已有实例在运行」，桥接于是永远起不来，且日志里看不出任何异常。
+//
+// Windows 上没有任何便宜的通用办法：tasklist 不给命令行，wmic 在 Win11 已移除。
+// 只有 PowerShell CIM，实测约 1.3 秒——所以它**只允许在启动时调用一次**，
+// 绝不能进 hook 或轮询这类热路径。
+function commandLineOf(pid) {
+  if (!pid) return null;
+  try {
+    const r = spawnSync('powershell', ['-NoProfile', '-Command',
+      `(Get-CimInstance Win32_Process -Filter 'ProcessId=${Number(pid)}').CommandLine`,
+    ], { encoding: 'utf8', timeout: 8000, windowsHide: true });
+    const s = (r.stdout || '').trim();
+    return s || null;
+  } catch (_) {
+    return null;
+  }
+}
+
 module.exports = {
   name: 'win32',
   supportsPresence: true,
+
+  // 只给单实例锁用（启动时一次）。热路径上不要调。
+  commandLineOf,
 
   get presenceExe() {
     return fs.existsSync(EXE) ? EXE : null;
@@ -118,6 +143,10 @@ module.exports = {
 
   // Windows 上被强杀的进程句柄回收有延迟，process.kill(pid, 0) 可能仍报「活着」。
   // 所以再核对一次 tasklist 里的进程名，避免把死掉的旧 pid 当成还在跑。
+  //
+  // 注意这里只判「这个 pid 上是不是一个 node」。它被热路径反复调用
+  // （阻塞等待里每 10 秒一次），不能在这里读命令行——那要 1.3 秒。
+  // 「是不是**我们**的桥接」这件事由单实例锁单独判，见 kernel/daemon.js。
   pidAlive(pid) {
     if (!pid) return false;
     try {

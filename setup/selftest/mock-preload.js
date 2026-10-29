@@ -109,7 +109,37 @@ function handle(argv, opts) {
       }
       return ok({ ok: true, data: { saved_path: out, size_bytes: 10 } });
     }
-    if (sub === 'pins' || sub === '+pins' || sub === 'pin') return ok({ ok: true });
+    // 置顶的增删记进 pins.jsonl（**不**混进 outbox）。
+    //
+    // 为什么单独一个文件：outbox 的语义是「我们发出去的消息」，多处用例靠
+    // 「最后一条」判断这次发的是哪张卡。置顶不是消息，混进去会把那些断言
+    // 全部错位到一条没有卡片的记录上。
+    if (sub === 'pins') {
+      const op = a[2] || '';
+      let mid = null;
+      const mi = a.indexOf('--message-id');
+      if (mi >= 0) mid = a[mi + 1];
+      if (!mid) {
+        const di = a.indexOf('--data');
+        try { mid = (JSON.parse(a[di + 1]) || {}).message_id || null; } catch (_) {}
+      }
+      if (op === 'delete') {
+        append(path.join(MOCK_DIR, 'pins.jsonl'), { at: new Date().toISOString(), op: 'unpin', messageId: mid });
+        return ok({ ok: true, data: {} });
+      }
+      if (op === 'create') {
+        append(path.join(MOCK_DIR, 'pins.jsonl'), { at: new Date().toISOString(), op: 'pin', messageId: mid });
+        return ok({ ok: true, data: {} });
+      }
+      if (op === 'list') {
+        // 群里的置顶由沙箱文件给出，用例可以预置一批「历史残留」
+        let list = [];
+        try { list = JSON.parse(fs.readFileSync(path.join(MOCK_DIR, 'pins.json'), 'utf8')) || []; } catch (_) {}
+        return ok({ ok: true, data: { has_more: false, items: list } });
+      }
+      return ok({ ok: true });
+    }
+    if (sub === '+pins' || sub === 'pin') return ok({ ok: true });
 
     // 原地更新卡片（状态卡靠它刷新）。记进 outbox，用例据此断言「刷新了」与
     // 「内容没变时没刷新」——只回 ok 的话，两者在调用方看来完全一样。

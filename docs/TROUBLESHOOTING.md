@@ -52,6 +52,7 @@
 | 锁屏了终端还弹窗 | `data/presence.json` 的 `locked` | Windows 看 `fgProc` 应为 `LockApp`；macOS 看 `locked` 是否为 true；Linux 看 `loginctl` 能不能报 `LockedHint`。`config.json` 里 `presenceAware:false` 可临时退回 |
 | 新窗口停在 `Accessing workspace` | 目录是否已信任 | 桥接会自动预置信任；仍卡住就在电脑上按一次回车 |
 | 提问卡片一直不出现 | `data/bridge.pid` 里的进程是否活着 | `node setup/check.js` 看各项 |
+| **开机后桥接一直没起来，日志停在昨天，看门狗进程却还在** | `platform/win32/*.vbs` 是不是纯 ASCII + CRLF | 中文注释存成 UTF-8 时，cscript 按 GBK 解析会在解析阶段静默退出（退出码 0、不报错、不起 node）。改成英文注释 + CRLF 保存；`check.js` 有专门一项检查这个 |
 | 权限确认卡片不出现 | 是否命中 `deny` 规则 / MCP 要求人工交互 / `dontAsk` 模式 | 这几类问也放不过，只能在终端确认 |
 | 所有 hook 静默失效、无报错 | `check.js` 的 `hooks-node` | hook 里写的是 node 绝对路径，换 Node 版本后会指向不存在的文件。`node setup/install.js --hooks` 重装 |
 | 新窗口里报 `SessionStart:startup hook error`（状态码 34，提示语是乱码） | `logs/hook-boot.log` 有没有这一次的记录 | **没有** = hook 根本没被执行：Windows 上命令不能加引号，`"node.exe" "x.js"` 会被 `cmd /c` 当成一个程序名。重跑 `node setup/install.js --hooks --cc-switch` 换成不带引号的形式。**有** = 执行了但后面崩了，按那行的 `argv`／环境变量继续查 |

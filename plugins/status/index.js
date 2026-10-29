@@ -21,10 +21,11 @@
 
 const fs = require('fs');
 const path = require('path');
-const { spawn } = require('child_process');
 
 const lib = require('../../kernel/lib');
 const probe = require('./src/probe');
+const { lark } = require('./src/lark');
+const pins = require('./src/pins');
 const { buildStatusCard, signature } = require('./src/card');
 
 // 每个会话的卡片状态：{ messageId, sig, running, runningSince, idleSince, refreshedAt }
@@ -70,28 +71,6 @@ function saveCards() {
 // 2 秒一轮、一次调用 1.5 秒，不收口的话同一个窗口的刷新会越积越多。
 let inFlight = null;
 
-function lark(args) {
-  return new Promise((resolve) => {
-    let cfg;
-    try { cfg = lib.readConfig(); } catch (_) { cfg = {}; }
-    const bin = cfg.larkCli || 'lark-cli';
-    const child = spawn(bin, args, {
-      cwd: lib.ROOT, windowsHide: true, shell: false, stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    let out = '';
-    child.stdout.on('data', (d) => { out += d.toString('utf8'); });
-    child.stderr.on('data', () => {});
-    const timer = setTimeout(() => { try { child.kill(); } catch (_) {} }, 20000);
-    child.on('error', () => { clearTimeout(timer); resolve(null); });
-    child.on('close', () => {
-      clearTimeout(timer);
-      const s = out.trim();
-      if (!s) return resolve(null);
-      try { resolve(JSON.parse(s)); } catch (_) { resolve({ ok: false, raw: s.slice(0, 200) }); }
-    });
-  });
-}
-
 function patchCard(messageId, card) {
   return lark(['im', 'messages', 'patch', '--as', 'bot',
     '--message-id', messageId, '--data', JSON.stringify({ content: JSON.stringify(card) })])
@@ -127,7 +106,11 @@ async function createCard(ctx, sessionId, rootMessageId, card) {
 // 为什么是 patch 而不是撤回：撤回是高风险操作，且消息一消失，用户回头看
 // 话题时就分不清「这里本来有没有东西」。留一张灰卡说明「这一轮已结束，
 // 状态见下方最新一张」，比凭空少一条消息清楚得多。
-function retireCard(st) {
+//
+// 顺带撤掉它的置顶：那张卡已经没用了，留着只会把「置顶」列表越堆越长。
+// 撤回是 await 的（不像 patch 那样甩出去）——换卡是低频路径，多等 1.5 秒不要紧，
+// 但「先置新卡还是先撤旧卡」的顺序必须确定，否则清理逻辑没法测。
+async function retireCard(ctx, st) {
   if (!st || !st.messageId) return;
   const card = {
     schema: '2.0',
@@ -136,6 +119,9 @@ function retireCard(st) {
     body: { elements: [{ tag: 'markdown', content: '<font color=\'grey\'>这一轮已结束，状态见下方最新一张。</font>' }] },
   };
   patchCard(st.messageId, card).catch(() => {});
+  if (ctx.config.autoUnpin !== false && ctx.config.pinCard !== false) {
+    await pins.unpin(st.messageId).catch(() => {});
+  }
 }
 
 // 一张卡的一次刷新。返回 true 表示这次真的发了请求。
@@ -186,7 +172,7 @@ async function tick(ctx, sessionId, live) {
   if (newPrompt || (flippedToIdle && hasSubtasks)) {
     if (newPrompt) ctx.log(`${sessionId.slice(0, 8)} 用户开了新一轮，换一张状态卡`);
     else ctx.log(`${sessionId.slice(0, 8)} 本轮已回复但还有 ${pr.subtasks.length} 个子任务，换一张卡`);
-    retireCard(st);
+    await retireCard(ctx, st);
     st.messageId = null;
     st.sig = '';
   }
@@ -285,7 +271,42 @@ async function drain(ctx) {
       inFlight = null;
     }
   }
+
+  await maybeSweepPins(ctx, live);
   return { live: live.size, tried, patched };
+}
+
+// 置顶清理的节流：翻页 + 逐条撤回都要进程启动，一分钟做一次就够。
+// 这是「清理」不是「同步」，晚一分钟没人感觉得到，但每 2 秒翻一次页会把
+// 状态卡刷新饿死。
+const SWEEP_INTERVAL_MS = 60000;
+let lastSweepAt = 0;
+
+async function maybeSweepPins(ctx, live) {
+  if (ctx.config.autoUnpin === false) return;
+  const now = Date.now();
+  if (now - lastSweepAt < SWEEP_INTERVAL_MS) return;
+  lastSweepAt = now;
+
+  // 要保留的：活窗口的话题根 + 当前有效状态卡。
+  // 关掉的窗口、换掉的旧卡都不在里面，它们的置顶会被撤掉。
+  const keep = new Set();
+  for (const sid of live.keys()) {
+    const t = lib.readThreadRoot(sid);
+    if (t && t.rootMessageId) keep.add(t.rootMessageId);
+  }
+  for (const st of cards.values()) if (st.messageId) keep.add(st.messageId);
+
+  try {
+    await pins.sweep({
+      chatId: ctx.global && ctx.global.chatId,
+      keep,
+      budget: 10,
+      log: (m) => ctx.log(m),
+    });
+  } catch (e) {
+    ctx.log(`清理置顶失败: ${e.message}`);
+  }
 }
 
 let timer = null;

@@ -115,6 +115,21 @@ module.exports = {
     }
   },
 
+  // 读某个 pid 的完整命令行；取不到返回 null。只给单实例锁用（启动时一次）。
+  // ps 在 POSIX 上本来就有完整命令行，不必像 Windows 那样绕 1.3 秒。
+  commandLineOf(pid) {
+    if (!pid) return null;
+    try {
+      const r = spawnSync('ps', ['-p', String(pid), '-o', 'command='], {
+        encoding: 'utf8', timeout: 5000,
+      });
+      const s = (r.stdout || '').trim();
+      return s || null;
+    } catch (_) {
+      return null;
+    }
+  },
+
   autostart: {
     kind: 'launchd',
     install: path.join(HERE, 'install-autostart.sh'),

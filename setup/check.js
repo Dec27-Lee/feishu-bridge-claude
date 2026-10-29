@@ -160,6 +160,27 @@ if (platform) {
     add('optional', 'presence', fs.existsSync(exe),
       '在场采样器已编译', fs.existsSync(exe) ? exe : '未编译',
       'node setup/install.js --build   （需要 .NET Framework 的 csc，Windows 自带）');
+
+    // .vbs 必须是纯 ASCII + CRLF。
+    //
+    // Windows 的 cscript/wscript 按系统代码页（中文系统是 GBK）读 .vbs。文件用
+    // UTF-8 存中文注释时，这些字节会被解成乱七八糟的内容，解析阶段就静默退出：
+    // 退出码 0、不报错、不起 node、日志里什么都没有。表现就是「重启后桥接一直没
+    // 起来」，而且看不出任何线索——2026-10-28 那次空转 35 小时就是这么来的。
+    // 这条检查必须存在，否则下次谁顺手写个中文注释就又踩一遍。
+    const vbsDir = path.join(ROOT, 'platform', 'win32');
+    const bad = [];
+    for (const f of fs.readdirSync(vbsDir)) {
+      if (!f.toLowerCase().endsWith('.vbs')) continue;
+      const buf = fs.readFileSync(path.join(vbsDir, f));
+      const reasons = [];
+      if (buf.some((b) => b > 127)) reasons.push('含非 ASCII 字符');
+      if (!buf.includes(Buffer.from('\r\n'))) reasons.push('不是 CRLF 换行');
+      if (reasons.length) bad.push(`${f}（${reasons.join('、')}）`);
+    }
+    add('required', 'vbs-encoding', bad.length === 0,
+      'Windows 脚本编码正确', bad.length ? bad.join('；') : `${vbsDir} 下 .vbs 均为纯 ASCII + CRLF`,
+      '把注释改成英文并用 CRLF 保存：cscript 按 ANSI 代码页读 .vbs，UTF-8 中文会静默解析失败');
   } else {
     // macOS / Linux 的采样器是随仓库分发的 shell 脚本，不需要编译。
     // 但脚本能不能真采到数是另一回事（Linux 要 xprintidle、Wayland 下拿不到），
